@@ -1,10 +1,17 @@
 export interface Flight {
-  id: string;
-  type: string;
-  alt: number;
-  spd: number;
+  hex: string;
+  flight: string;
+  altitude: number;
+  speed: number;
+  heading: number;
+  lat: number;
+  lon: number;
   distance: number;
   bearing: number;
+  origin: string;
+  destination: string;
+  type: string;
+  reg: string;
 }
 
 export interface SystemStatus {

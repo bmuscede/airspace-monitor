@@ -50,7 +50,7 @@ export default function LogsView({ logs, logFilters, setLogFilters }: LogsViewPr
 
       <div className="flex-1 bg-slate-950 border border-slate-800 rounded-2xl p-4 overflow-hidden shadow-2xl relative min-h-[400px]">
         <div className="absolute top-0 left-0 right-0 h-8 bg-gradient-to-b from-slate-950 to-transparent z-10 pointer-events-none"></div>
-        <div ref={containerRef} className="h-full overflow-y-auto font-mono text-sm space-y-2 pr-2 custom-scrollbar pb-10">
+        <div ref={containerRef} className="h-full overflow-y-auto overflow-x-hidden font-mono text-sm space-y-2 pr-2 custom-scrollbar pb-10">
           {filteredLogs.length === 0 ? (
             <div className="text-slate-600 italic text-center py-10">No logs matching filters.</div>
           ) : (
@@ -70,11 +70,11 @@ export default function LogsView({ logs, logFilters, setLogFilters }: LogsViewPr
               }[log.level];
 
               return (
-                <div key={log.id} className="flex items-start space-x-3 hover:bg-slate-800/30 p-1.5 rounded transition-colors group">
+                <div key={log.id} className="flex items-start space-x-3 w-full hover:bg-slate-800/30 p-1.5 rounded transition-colors group">
                   <span className="text-slate-600 text-xs shrink-0 mt-0.5">{log.timestamp}</span>
                   <span className="shrink-0 mt-0.5">{icon}</span>
-                  <span className="text-slate-500 text-xs w-16 shrink-0 mt-0.5 uppercase tracking-wider">[{log.source}]</span>
-                  <span className={`${textColor} break-words group-hover:text-white transition-colors`}>{log.message}</span>
+                  <span className="text-slate-500 text-xs w-48 truncate shrink-0 mt-0.5 uppercase tracking-wider">[{log.source}]</span>
+                  <span className={`flex-1 min-w-0 ${textColor} break-words whitespace-pre-wrap group-hover:text-white transition-colors`}>{log.message}</span>
                 </div>
               );
             })

@@ -6,7 +6,7 @@ interface RadarDisplayProps {
 
 export default function RadarDisplay({ flights }: RadarDisplayProps) {
   return (
-    <div className="relative w-full aspect-square max-w-md mx-auto bg-slate-950/50 rounded-full border border-slate-700/50 overflow-hidden shadow-[0_0_40px_rgba(0,0,0,0.5)] backdrop-blur-sm">
+    <div className="relative h-full w-auto aspect-square max-h-full max-w-full mx-auto bg-slate-950/50 rounded-full border border-slate-700/50 overflow-hidden shadow-[0_0_40px_rgba(0,0,0,0.5)] backdrop-blur-sm">
       {/* Radar Grid Lines */}
       <div className="absolute inset-0 rounded-full border border-emerald-500/20 m-8"></div>
       <div className="absolute inset-0 rounded-full border border-emerald-500/20 m-16"></div>
@@ -37,14 +37,14 @@ export default function RadarDisplay({ flights }: RadarDisplayProps) {
 
         return (
           <div 
-            key={flight.id}
+            key={flight.hex}
             className="absolute w-3 h-3 bg-emerald-400 rounded-full shadow-[0_0_10px_#34d399] transition-all duration-1000 z-10"
             style={{ left: `${x}%`, top: `${y}%`, transform: 'translate(-50%, -50%)' }}
           >
             <div className="absolute inset-0 bg-emerald-400 rounded-full animate-[ping-fade_2s_infinite]"></div>
             <div className="absolute top-4 left-4 bg-slate-900/90 text-emerald-300 text-[10px] px-2 py-1 rounded-md border border-emerald-500/30 whitespace-nowrap backdrop-blur-md font-mono shadow-xl">
-              <span className="font-bold text-white">{flight.id}</span> <br/>
-              {flight.alt}ft • {flight.spd}kts
+              <span className="font-bold text-white">{flight.flight !== '???' ? flight.flight : flight.hex.toUpperCase()}</span> <br/>
+              {flight.altitude}ft • {flight.speed}kts
             </div>
           </div>
         );

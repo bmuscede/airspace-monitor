@@ -5,27 +5,6 @@ import LogsView from './views/LogsView';
 import SettingsView from './views/SettingsView';
 import type { Flight, SystemStatus, LogEntry, WifiNetwork } from './types';
 
-const MOCK_FLIGHTS: Flight[] = [
-  { id: 'ACA860', type: 'B789', alt: 35000, spd: 490, distance: 15, bearing: 45 },
-  { id: 'WJA712', type: 'B38M', alt: 22000, spd: 380, distance: 40, bearing: 120 },
-  { id: 'JZA14', type: 'Q400', alt: 8000, spd: 250, distance: 8, bearing: 280 },
-];
-
-const MOCK_LOGS: LogEntry[] = [
-  { id: 1, timestamp: '12:00:01', level: 'INFO', message: 'Service started successfully.', source: 'system' },
-  { id: 2, timestamp: '12:00:05', level: 'DEBUG', message: 'Initialized E-Ink display driver.', source: 'hardware' },
-  { id: 3, timestamp: '12:01:12', level: 'INFO', message: 'Connected to readsb on port 30005.', source: 'decoder' },
-  { id: 4, timestamp: '12:02:44', level: 'WARN', message: 'FlightAware API response delayed (450ms).', source: 'api' },
-  { id: 5, timestamp: '12:05:00', level: 'ERROR', message: 'Failed to connect to I2C expander at 0x20.', source: 'hardware' },
-  { id: 6, timestamp: '12:06:30', level: 'INFO', message: 'New target acquired: ACA860.', source: 'radar' },
-  { id: 7, timestamp: '12:08:15', level: 'DEBUG', message: 'Flushing flight cache (TTL expired).', source: 'cache' },
-];
-
-const MOCK_WIFI_NETWORKS: WifiNetwork[] = [
-  { id: '1', ssid: 'Home_Network_5G' },
-  { id: '2', ssid: 'Airspace_IoT_Node' },
-];
-
 export default function AirspaceDashboard() {
   const [currentView, setCurrentView] = useState<'dashboard' | 'settings' | 'logs'>('dashboard');
   const mainRef = useRef<HTMLElement>(null);
@@ -38,25 +17,25 @@ export default function AirspaceDashboard() {
   const [systemStatus, setSystemStatus] = useState<SystemStatus>({
     git: 'Idle',
     csv: 'Up to date',
-    dump1090: 'Running',
-    service: 'Online',
+    dump1090: 'Checking...',
+    service: 'Checking...',
   });
   
   // Wi-Fi State
-  const [wifiNetworks, setWifiNetworks] = useState<WifiNetwork[]>(MOCK_WIFI_NETWORKS);
+  const [wifiNetworks, setWifiNetworks] = useState<WifiNetwork[]>([]);
 
-  // Mock Config State
+  // Config State
   const [config, setConfig] = useState({
-    flightaware_url: 'https://aeroapi.flightaware.com/aeroapi',
-    flightaware_api_key: 'fa_mock_key_12345',
+    flightaware_url: '',
+    flightaware_api_key: '',
     cache_ttl: 3600,
-    home_lat: 45.4215,
-    home_lon: -75.6972,
+    home_lat: 0.0,
+    home_lon: 0.0,
     max_radar_range_nm: 50,
   });
 
   // Logs State
-  const [logs, setLogs] = useState<LogEntry[]>(MOCK_LOGS);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
   const [logFilters, setLogFilters] = useState({
     DEBUG: true,
     INFO: true,
@@ -71,33 +50,121 @@ export default function AirspaceDashboard() {
     }
   }, [currentView]);
 
+  // Initial Load
   useEffect(() => {
-    // Simulate flight movement
-    setFlights(MOCK_FLIGHTS);
-    const interval = setInterval(() => {
-      setFlights(prev => prev.map(f => ({
-        ...f,
-        distance: Math.max(1, f.distance - 0.5),
-        bearing: (f.bearing + 1) % 360
-      })));
-    }, 3000);
-    return () => clearInterval(interval);
+    fetch('/api/config')
+      .then(res => res.json())
+      .then(data => {
+        if (data && typeof data === 'object') {
+          setConfig(prev => ({ ...prev, ...data }));
+        }
+      })
+      .catch(console.error);
+
+    fetch('/api/wifi')
+      .then(res => res.json())
+      .then(data => {
+        if (Array.isArray(data)) {
+          setWifiNetworks(data.map((n: any) => ({ id: n.ssid, ssid: n.ssid })));
+        }
+      })
+      .catch(console.error);
+  }, []);
+
+  // Polling logic
+  useEffect(() => {
+    // TODO: See about not hardcoding these intervals.
+
+    const fetchFlights = async () => {
+      try {
+        const res = await fetch('/api/flights');
+        const data = await res.json();
+        // TODO: For now, a jump is acceptable. We can smoothly interpret it over time based on the heading eventually.
+        setFlights(data);
+      } catch (err) {
+        console.error(err);
+      }
+    };
+
+    const fetchState = async () => {
+      try {
+        const res = await fetch('/api/state');
+        const data = await res.json();
+        
+        setDisplayMode(data.displayMode || 'E-Ink');
+        setSystemStatus(prev => ({
+          ...prev,
+          dump1090: data.readsbConnected ? 'Connected' : 'Disconnected',
+          service: data.systemRunning ? 'Online' : 'Offline'
+        }));
+      } catch (err) {
+        console.error(err);
+      }
+    };
+
+    const fetchLogs = async () => {
+      try {
+        const res = await fetch('/api/logs');
+        const data = await res.json();
+        setLogs(data);
+      } catch (err) {
+        console.error(err);
+      }
+    };
+
+    // Initial fetch
+    fetchFlights();
+    fetchState();
+    fetchLogs();
+
+    // Set up polling intervals
+    const flightInterval = setInterval(() => {
+      fetchFlights();
+      fetchState();
+    }, 2000);
+
+    const logInterval = setInterval(fetchLogs, 3000);
+
+    return () => {
+      clearInterval(flightInterval);
+      clearInterval(logInterval);
+    };
   }, []);
 
   // Actions
-  const handleGitPull = () => {
+  const handleGitPull = async () => {
     setSystemStatus(prev => ({ ...prev, git: 'Pulling...' }));
-    setTimeout(() => setSystemStatus(prev => ({ ...prev, git: 'Updated (main)' })), 2000);
+    try {
+      const res = await fetch('/api/git-pull', { method: 'POST' });
+      const data = await res.json();
+      if (data.status === 'success') {
+        setSystemStatus(prev => ({ ...prev, git: 'Updated (main)' }));
+      } else {
+        setSystemStatus(prev => ({ ...prev, git: 'Error' }));
+      }
+    } catch (err) {
+      setSystemStatus(prev => ({ ...prev, git: 'Error' }));
+    }
   };
 
-  const handleCsvUpdate = () => {
-    setSystemStatus(prev => ({ ...prev, csv: 'Downloading...' }));
-    setTimeout(() => setSystemStatus(prev => ({ ...prev, csv: 'Up to date' })), 3000);
+  const handleCsvUpdate = async () => {
+    setSystemStatus(prev => ({ ...prev, csv: 'Updating...' }));
+    try {
+      await fetch('/api/update-db', { method: 'POST' });
+      // TODO: Track CSV update completion properly since the backend doesn't broadcast progress. Mocking sleep for now.
+      setTimeout(() => setSystemStatus(prev => ({ ...prev, csv: 'Up to date' })), 5000);
+    } catch (err) {
+      setSystemStatus(prev => ({ ...prev, csv: 'Error' }));
+    }
   };
 
-  const handleRestartService = () => {
+  const handleRestartService = async () => {
     setSystemStatus(prev => ({ ...prev, service: 'Restarting...' }));
-    setTimeout(() => setSystemStatus(prev => ({ ...prev, service: 'Online' })), 3500);
+    try {
+      await fetch('/api/restart-service', { method: 'POST' });
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   const handleConfigChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -105,45 +172,63 @@ export default function AirspaceDashboard() {
     setConfig(prev => ({ ...prev, [name]: value }));
   };
 
-  const handleSaveConfig = () => {
-    const newLog: LogEntry = {
-      id: logs.length + 1,
-      timestamp: new Date().toLocaleTimeString('en-US', { hour12: false }),
-      level: 'INFO',
-      message: 'Configuration saved successfully.',
-      source: 'system'
-    };
-    setLogs(prev => [...prev, newLog]);
+  const handleSaveConfig = async () => {
+    try {
+      await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
+      });
+    } catch (err) {
+      console.error(err);
+    }
   };
 
-  const handleAddWifiNetwork = (ssid: string, _password: string) => {
-    const newNetwork: WifiNetwork = {
-      id: Date.now().toString(),
-      ssid
-    };
-    setWifiNetworks(prev => [...prev, newNetwork]);
-    const newLog: LogEntry = {
-      id: logs.length + 1,
-      timestamp: new Date().toLocaleTimeString('en-US', { hour12: false }),
-      level: 'INFO',
-      message: `Added Wi-Fi network '${ssid}' to wpa_supplicant.`,
-      source: 'network'
-    };
-    setLogs(prev => [...prev, newLog]);
+  const setRemoteDisplayMode = async (mode: string) => {
+    if (mode === displayMode) return;
+    try {
+      const res = await fetch('/api/mode', { method: 'POST' });
+      const data = await res.json();
+      setDisplayMode(data.mode);
+    } catch (err) {
+      console.error(err);
+    }
   };
 
-  const handleRemoveWifiNetwork = (id: string) => {
+  const handleAddWifiNetwork = async (ssid: string, password: string) => {
+    try {
+      const res = await fetch('/api/wifi', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ssid, password })
+      });
+      if (res.ok) {
+        const networksRes = await fetch('/api/wifi');
+        const data = await networksRes.json();
+        if (Array.isArray(data)) {
+          setWifiNetworks(data.map((n: any) => ({ id: n.ssid, ssid: n.ssid })));
+        }
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleRemoveWifiNetwork = async (id: string) => {
     const target = wifiNetworks.find(n => n.id === id);
-    setWifiNetworks(prev => prev.filter(n => n.id !== id));
-    if (target) {
-      const newLog: LogEntry = {
-        id: logs.length + 1,
-        timestamp: new Date().toLocaleTimeString('en-US', { hour12: false }),
-        level: 'INFO',
-        message: `Removed Wi-Fi network '${target.ssid}' from wpa_supplicant.`,
-        source: 'network'
-      };
-      setLogs(prev => [...prev, newLog]);
+    if (!target) return;
+    
+    try {
+      const res = await fetch(`/api/wifi/${target.ssid}`, { method: 'DELETE' });
+      if (res.ok) {
+        const networksRes = await fetch('/api/wifi');
+        const data = await networksRes.json();
+        if (Array.isArray(data)) {
+          setWifiNetworks(data.map((n: any) => ({ id: n.ssid, ssid: n.ssid })));
+        }
+      }
+    } catch (err) {
+      console.error(err);
     }
   };
 
@@ -172,7 +257,7 @@ export default function AirspaceDashboard() {
             handleConfigChange={handleConfigChange} 
             handleSaveConfig={handleSaveConfig} 
             displayMode={displayMode} 
-            setDisplayMode={setDisplayMode} 
+            setDisplayMode={setRemoteDisplayMode} 
             systemStatus={systemStatus} 
             handleGitPull={handleGitPull} 
             handleCsvUpdate={handleCsvUpdate} 

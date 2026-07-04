@@ -1,64 +1,64 @@
 #!/bin/bash
 # ---------------------------------------------------------
 # OS Automation Script for Airspace Monitor
-# This must be copied to the boot partition.
+# This must be copied to the boot partition of DietPi.
 # ---------------------------------------------------------
 
 echo "Starting Airspace Monitor automated setup..."
 
+# Note: Please update the GITHUB_REPO variable if you are not bmuscede.
+GITHUB_REPO="https://github.com/bmuscede/airspace-monitor.git"
+INSTALL_DIR="/opt/airspace-monitor"
+
 # Update package list and install system dependencies.
-# We need Python, pip, git, and hardware buses (I2C/SPI) for the displays
 apt-get update
-apt-get install -y python3 python3-pip python3-venv git i2c-tools python3-smbus spi-tools
+apt-get install -y python3 python3-pip python3-venv git i2c-tools python3-smbus spi-tools nodejs npm
 
 # Enable I2C and SPI on the Raspberry Pi hardware level
-# This is required for the Split-flap driver (I2C) and E-Ink (SPI)
 sed -i 's/#dtparam=i2c_arm=on/dtparam=i2c_arm=on/' /boot/config.txt
 sed -i 's/#dtparam=spi=on/dtparam=spi=on/' /boot/config.txt
 
-# Install the ADS-B Decoder
-# We use 'readsb' (a highly optimized, modern fork of dump1090).
-# This automated script pulls the software and configures the RTL-SDR.
+# Install the ADS-B Decoder (readsb)
 echo "Installing readsb (ADS-B Decoder)..."
 bash -c "$(wget -q -O - https://github.com/wiedehopf/adsb-scripts/raw/master/readsb-install.sh)"
 
-# Set up the project directory and Python virtual environment
+# Clone the project repository
+echo "Cloning repository from $GITHUB_REPO..."
+
+# Remove the directory if it somehow already exists, then clone
+rm -rf $INSTALL_DIR
+git clone $GITHUB_REPO $INSTALL_DIR
+
+# Set up the Python Backend (monitor-service)
 echo "Setting up Python environment..."
-mkdir -p /opt/airspace-monitor
-cd /opt/airspace-monitor
-
-# Create a virtual environment so we don't conflict with system Python
+cd $INSTALL_DIR/monitor-service
 python3 -m venv venv
-/opt/airspace-monitor/venv/bin/pip install --upgrade pip
+$INSTALL_DIR/monitor-service/venv/bin/pip install --upgrade pip
 
-# Install libraries for I2C and common E-Ink dependencies
-/opt/airspace-monitor/venv/bin/pip install smbus2 spidev RPi.GPIO Pillow requests
+# Install universal API dependencies, followed by hardware-specific ones
+if [ -f "requirements.txt" ]; then
+    $INSTALL_DIR/monitor-service/venv/bin/pip install -r requirements.txt
+fi
 
-# Create a placeholder for your future Python controller script
-cat << 'EOF' > /opt/airspace-monitor/controller.py
-import time
+if [ -f "rpi.requirements.txt" ]; then
+    $INSTALL_DIR/monitor-service/venv/bin/pip install -r rpi.requirements.txt
+fi
 
-def main():
-    print("Airspace Monitor controller is running!")
-    # Future code: Read JSON from readsb, update E-Ink/Flaps
-    while True:
-        time.sleep(10)
+# Set up the React Dashboard (monitor-dashboard)
+echo "Setting up Monitor Dashboard Environment..."
+cd $INSTALL_DIR/monitor-dashboard
+npm install
 
-if __name__ == "__main__":
-    main()
-EOF
-
-# Create the systemd service to run the Python script automatically on boot
-echo "Creating systemd service..."
-cat << 'EOF' > /etc/systemd/system/airspace-monitor.service
+# Create the Python Backend Service
+echo "Creating Monitor Service Environment..."
+cat << 'EOF' > /etc/systemd/system/airspace-monitor-service.service
 [Unit]
-Description=Airspace Monitor Controller
-# Ensure the network and the ADS-B decoder are running first
+Description=Airspace Monitor Python Backend
 After=network.target readsb.service
 
 [Service]
-ExecStart=/opt/airspace-monitor/venv/bin/python /opt/airspace-monitor/controller.py
-WorkingDirectory=/opt/airspace-monitor
+ExecStart=/opt/airspace-monitor/monitor-service/venv/bin/python main.py
+WorkingDirectory=/opt/airspace-monitor/monitor-service
 StandardOutput=inherit
 StandardError=inherit
 Restart=always
@@ -68,9 +68,31 @@ User=root
 WantedBy=multi-user.target
 EOF
 
-# Enable the service so it starts on every reboot
-systemctl enable airspace-monitor.service
-systemctl start airspace-monitor.service
+# Create the Monitor Dashboard Service
+# TODO: Currently runs as dev.
+echo "Creating Monitor Dashboard systemd service..."
+cat << 'EOF' > /etc/systemd/system/airspace-monitor-dashboard.service
+[Unit]
+Description=Airspace Monitor React Dashboard
+After=network.target airspace-monitor-service.service
+
+[Service]
+ExecStart=/usr/bin/npm run dev -- --host 0.0.0.0
+WorkingDirectory=/opt/airspace-monitor/monitor-dashboard
+StandardOutput=inherit
+StandardError=inherit
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Enable and start both services.
+systemctl enable airspace-monitor-service.service
+systemctl enable airspace-monitor-dashboard.service
+systemctl start airspace-monitor-service.service
+systemctl start airspace-monitor-dashboard.service
 
 echo "Airspace Monitor setup complete! Rebooting..."
 reboot

@@ -1,2 +1,5 @@
 # Standard Git Ignore Items
 venv/
+__pycache__/
+*.log
+config.json
