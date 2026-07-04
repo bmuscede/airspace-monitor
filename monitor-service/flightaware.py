@@ -1,10 +1,6 @@
 import requests
 import time
 
-# TODO: Unhardcode these values
-FA_URL = "https://aeroapi.flightaware.com/aeroapi"
-CACHE_TTL = 3600
-
 class FlightAwareClient:
     def __init__(self, apiKey: str = ""):
         if not self.apiKey:

@@ -1,20 +1,9 @@
-import { useState, useEffect } from 'react';
-import { Radar, RefreshCw, Download, GitPullRequest, Settings, Plane, Activity, CheckCircle2, HardDrive } from 'lucide-react';
-
-interface Flight {
-  id: string;
-  type: string;
-  alt: number;
-  spd: number;
-  distance: number;
-  bearing: number;
-}
-
-interface SystemStatus {
-  git: string;
-  csv: string;
-  dump1090: string;
-}
+import { useState, useEffect, useRef } from 'react';
+import Sidebar from './components/Sidebar';
+import DashboardView from './views/DashboardView';
+import LogsView from './views/LogsView';
+import SettingsView from './views/SettingsView';
+import type { Flight, SystemStatus, LogEntry, WifiNetwork } from './types';
 
 const MOCK_FLIGHTS: Flight[] = [
   { id: 'ACA860', type: 'B789', alt: 35000, spd: 490, distance: 15, bearing: 45 },
@@ -22,19 +11,69 @@ const MOCK_FLIGHTS: Flight[] = [
   { id: 'JZA14', type: 'Q400', alt: 8000, spd: 250, distance: 8, bearing: 280 },
 ];
 
+const MOCK_LOGS: LogEntry[] = [
+  { id: 1, timestamp: '12:00:01', level: 'INFO', message: 'Service started successfully.', source: 'system' },
+  { id: 2, timestamp: '12:00:05', level: 'DEBUG', message: 'Initialized E-Ink display driver.', source: 'hardware' },
+  { id: 3, timestamp: '12:01:12', level: 'INFO', message: 'Connected to readsb on port 30005.', source: 'decoder' },
+  { id: 4, timestamp: '12:02:44', level: 'WARN', message: 'FlightAware API response delayed (450ms).', source: 'api' },
+  { id: 5, timestamp: '12:05:00', level: 'ERROR', message: 'Failed to connect to I2C expander at 0x20.', source: 'hardware' },
+  { id: 6, timestamp: '12:06:30', level: 'INFO', message: 'New target acquired: ACA860.', source: 'radar' },
+  { id: 7, timestamp: '12:08:15', level: 'DEBUG', message: 'Flushing flight cache (TTL expired).', source: 'cache' },
+];
+
+const MOCK_WIFI_NETWORKS: WifiNetwork[] = [
+  { id: '1', ssid: 'Home_Network_5G' },
+  { id: '2', ssid: 'Airspace_IoT_Node' },
+];
+
 export default function AirspaceDashboard() {
+  const [currentView, setCurrentView] = useState<'dashboard' | 'settings' | 'logs'>('dashboard');
+  const mainRef = useRef<HTMLElement>(null);
+  
+  // Dashboard State
   const [flights, setFlights] = useState<Flight[]>([]);
+  
+  // Settings State
   const [displayMode, setDisplayMode] = useState<string>('E-Ink');
   const [systemStatus, setSystemStatus] = useState<SystemStatus>({
     git: 'Idle',
     csv: 'Up to date',
     dump1090: 'Running',
+    service: 'Online',
+  });
+  
+  // Wi-Fi State
+  const [wifiNetworks, setWifiNetworks] = useState<WifiNetwork[]>(MOCK_WIFI_NETWORKS);
+
+  // Mock Config State
+  const [config, setConfig] = useState({
+    flightaware_url: 'https://aeroapi.flightaware.com/aeroapi',
+    flightaware_api_key: 'fa_mock_key_12345',
+    cache_ttl: 3600,
+    home_lat: 45.4215,
+    home_lon: -75.6972,
+    max_radar_range_nm: 50,
+  });
+
+  // Logs State
+  const [logs, setLogs] = useState<LogEntry[]>(MOCK_LOGS);
+  const [logFilters, setLogFilters] = useState({
+    DEBUG: true,
+    INFO: true,
+    WARN: true,
+    ERROR: true
   });
 
   useEffect(() => {
-    // In production: fetch('/api/flights').then(res => res.json()).then(setFlights)
+    // Reset main scroll position when switching views
+    if (mainRef.current) {
+      mainRef.current.scrollTop = 0;
+    }
+  }, [currentView]);
+
+  useEffect(() => {
+    // Simulate flight movement
     setFlights(MOCK_FLIGHTS);
-    
     const interval = setInterval(() => {
       setFlights(prev => prev.map(f => ({
         ...f,
@@ -45,6 +84,7 @@ export default function AirspaceDashboard() {
     return () => clearInterval(interval);
   }, []);
 
+  // Actions
   const handleGitPull = () => {
     setSystemStatus(prev => ({ ...prev, git: 'Pulling...' }));
     setTimeout(() => setSystemStatus(prev => ({ ...prev, git: 'Updated (main)' })), 2000);
@@ -55,180 +95,94 @@ export default function AirspaceDashboard() {
     setTimeout(() => setSystemStatus(prev => ({ ...prev, csv: 'Up to date' })), 3000);
   };
 
-  const renderRadar = () => {
-    return (
-      <div className="relative w-full aspect-square max-w-md mx-auto bg-slate-900 rounded-full border-4 border-slate-700 overflow-hidden shadow-2xl">
-        {/* Radar Grid Lines */}
-        <div className="absolute inset-0 rounded-full border border-emerald-500/30 m-8"></div>
-        <div className="absolute inset-0 rounded-full border border-emerald-500/30 m-16"></div>
-        <div className="absolute inset-0 rounded-full border border-emerald-500/30 m-24"></div>
-        <div className="absolute left-1/2 top-0 bottom-0 w-px bg-emerald-500/30"></div>
-        <div className="absolute top-1/2 left-0 right-0 h-px bg-emerald-500/30"></div>
-        
-        {/* Radar Sweep Animation */}
-        <div 
-          className="absolute top-1/2 left-1/2 w-1/2 h-1/2 bg-gradient-to-br from-emerald-500/40 to-transparent origin-top-left"
-          style={{ animation: 'spin 4s linear infinite' }}
-        ></div>
+  const handleRestartService = () => {
+    setSystemStatus(prev => ({ ...prev, service: 'Restarting...' }));
+    setTimeout(() => setSystemStatus(prev => ({ ...prev, service: 'Online' })), 3500);
+  };
 
-        <style>{`
-          @keyframes spin { 100% { transform: rotate(360deg); } }
-          @keyframes ping-fade { 0% { opacity: 1; transform: scale(1); } 100% { opacity: 0; transform: scale(2.5); } }
-        `}</style>
+  const handleConfigChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    setConfig(prev => ({ ...prev, [name]: value }));
+  };
 
-        {/* Home Base Marker */}
-        <div className="absolute top-1/2 left-1/2 w-2 h-2 bg-emerald-400 rounded-full -translate-x-1/2 -translate-y-1/2 shadow-[0_0_10px_#34d399]"></div>
+  const handleSaveConfig = () => {
+    const newLog: LogEntry = {
+      id: logs.length + 1,
+      timestamp: new Date().toLocaleTimeString('en-US', { hour12: false }),
+      level: 'INFO',
+      message: 'Configuration saved successfully.',
+      source: 'system'
+    };
+    setLogs(prev => [...prev, newLog]);
+  };
 
-        {/* Rendering Flights as Blips */}
-        {flights.map((flight) => {
-          const radius = (flight.distance / 50) * 50; 
-          const radians = (flight.bearing - 90) * (Math.PI / 180);
-          const x = 50 + radius * Math.cos(radians);
-          const y = 50 + radius * Math.sin(radians);
+  const handleAddWifiNetwork = (ssid: string, _password: string) => {
+    const newNetwork: WifiNetwork = {
+      id: Date.now().toString(),
+      ssid
+    };
+    setWifiNetworks(prev => [...prev, newNetwork]);
+    const newLog: LogEntry = {
+      id: logs.length + 1,
+      timestamp: new Date().toLocaleTimeString('en-US', { hour12: false }),
+      level: 'INFO',
+      message: `Added Wi-Fi network '${ssid}' to wpa_supplicant.`,
+      source: 'network'
+    };
+    setLogs(prev => [...prev, newLog]);
+  };
 
-          return (
-            <div 
-              key={flight.id}
-              className="absolute w-3 h-3 bg-emerald-400 rounded-full shadow-[0_0_8px_#34d399] transition-all duration-1000"
-              style={{ left: `${x}%`, top: `${y}%`, transform: 'translate(-50%, -50%)' }}
-            >
-              <div className="absolute inset-0 bg-emerald-400 rounded-full animate-[ping-fade_2s_infinite]"></div>
-              <div className="absolute top-4 left-4 bg-slate-800/80 text-emerald-400 text-xs px-2 py-1 rounded border border-emerald-500/50 whitespace-nowrap backdrop-blur-sm">
-                {flight.id} ({flight.alt}ft)
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    );
+  const handleRemoveWifiNetwork = (id: string) => {
+    const target = wifiNetworks.find(n => n.id === id);
+    setWifiNetworks(prev => prev.filter(n => n.id !== id));
+    if (target) {
+      const newLog: LogEntry = {
+        id: logs.length + 1,
+        timestamp: new Date().toLocaleTimeString('en-US', { hour12: false }),
+        level: 'INFO',
+        message: `Removed Wi-Fi network '${target.ssid}' from wpa_supplicant.`,
+        source: 'network'
+      };
+      setLogs(prev => [...prev, newLog]);
+    }
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-200 p-6 font-sans selection:bg-emerald-500/30">
-      <div className="max-w-6xl mx-auto space-y-6">
-        
-        {/* Header Section */}
-        <header className="flex items-center justify-between bg-slate-900 border border-slate-800 p-4 rounded-xl shadow-lg">
-          <div className="flex items-center space-x-3">
-            <Radar className="w-8 h-8 text-emerald-500" />
-            <div>
-              <h1 className="text-xl font-bold text-white">Airspace Command Center</h1>
-              <p className="text-sm text-slate-400">Local ADS-B Telemetry & Hardware Node</p>
-            </div>
-          </div>
-          <div className="flex items-center space-x-2 bg-emerald-500/10 text-emerald-400 px-3 py-1.5 rounded-full border border-emerald-500/20">
-            <Activity className="w-4 h-4 animate-pulse" />
-            <span className="text-sm font-medium">System Online</span>
-          </div>
-        </header>
+    <div className="flex h-screen bg-slate-950 text-slate-200 font-sans selection:bg-emerald-500/30 overflow-hidden relative selection:text-white">
+      {/* Dynamic Background */}
+      <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-emerald-600/10 rounded-full blur-[120px] pointer-events-none"></div>
+      <div className="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] bg-indigo-600/10 rounded-full blur-[120px] pointer-events-none"></div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          
-          <div className="lg:col-span-2 bg-slate-900 border border-slate-800 p-6 rounded-xl shadow-lg">
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="text-lg font-semibold flex items-center">
-                <Radar className="w-5 h-5 mr-2 text-blue-400" />
-                Live Airspace Radar
-              </h2>
-              <span className="text-xs bg-slate-800 text-slate-400 px-2 py-1 rounded">Range: 50 NM</span>
-            </div>
-            {renderRadar()}
-          </div>
+      <Sidebar 
+        currentView={currentView} 
+        setCurrentView={setCurrentView} 
+        systemStatus={systemStatus} 
+      />
 
-          <div className="space-y-6">
-            
-            {/* Active Flights List */}
-            <div className="bg-slate-900 border border-slate-800 p-5 rounded-xl shadow-lg">
-              <h2 className="text-md font-semibold mb-4 flex items-center">
-                <Plane className="w-5 h-5 mr-2 text-indigo-400" />
-                Overhead Targets
-              </h2>
-              <div className="space-y-3">
-                {flights.map(f => (
-                  <div key={f.id} className="bg-slate-800/50 p-3 rounded-lg border border-slate-700/50 flex justify-between items-center">
-                    <div>
-                      <div className="font-mono font-bold text-emerald-400">{f.id}</div>
-                      <div className="text-xs text-slate-400">{f.type} • {f.distance.toFixed(1)} NM</div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-sm text-slate-300">{f.alt.toLocaleString()} ft</div>
-                      <div className="text-xs text-slate-500">{f.spd} kts</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Hardware Settings */}
-            <div className="bg-slate-900 border border-slate-800 p-5 rounded-xl shadow-lg">
-              <h2 className="text-md font-semibold mb-4 flex items-center">
-                <Settings className="w-5 h-5 mr-2 text-amber-400" />
-                Hardware Configuration
-              </h2>
-              <div className="flex items-center justify-between bg-slate-800/50 p-3 rounded-lg border border-slate-700/50">
-                <span className="text-sm font-medium">Active Output</span>
-                <div className="flex bg-slate-950 rounded-lg p-1 border border-slate-800">
-                  <button 
-                    onClick={() => setDisplayMode('Split-Flap')}
-                    className={`px-3 py-1 text-xs rounded-md transition-colors ${displayMode === 'Split-Flap' ? 'bg-amber-500 text-slate-900 font-bold' : 'text-slate-400 hover:text-slate-200'}`}
-                  >
-                    Split-Flap
-                  </button>
-                  <button 
-                    onClick={() => setDisplayMode('E-Ink')}
-                    className={`px-3 py-1 text-xs rounded-md transition-colors ${displayMode === 'E-Ink' ? 'bg-indigo-500 text-white font-bold' : 'text-slate-400 hover:text-slate-200'}`}
-                  >
-                    E-Ink
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* System Administration */}
-            <div className="bg-slate-900 border border-slate-800 p-5 rounded-xl shadow-lg">
-              <h2 className="text-md font-semibold mb-4 flex items-center">
-                <HardDrive className="w-5 h-5 mr-2 text-rose-400" />
-                System Administration
-              </h2>
-              <div className="space-y-3">
-                <button 
-                  onClick={handleGitPull}
-                  className="w-full flex items-center justify-between p-3 bg-slate-800/50 hover:bg-slate-800 transition-colors rounded-lg border border-slate-700/50"
-                >
-                  <div className="flex items-center">
-                    <GitPullRequest className="w-4 h-4 mr-3 text-slate-400" />
-                    <span className="text-sm">Update Codebase</span>
-                  </div>
-                  <span className="text-xs text-emerald-400 font-mono">{systemStatus.git}</span>
-                </button>
-
-                <button 
-                  onClick={handleCsvUpdate}
-                  className="w-full flex items-center justify-between p-3 bg-slate-800/50 hover:bg-slate-800 transition-colors rounded-lg border border-slate-700/50"
-                >
-                  <div className="flex items-center">
-                    <Download className="w-4 h-4 mr-3 text-slate-400" />
-                    <span className="text-sm">Update Aircraft DB</span>
-                  </div>
-                  <span className="text-xs text-amber-400 font-mono">{systemStatus.csv}</span>
-                </button>
-
-                <div className="w-full flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">
-                  <div className="flex items-center">
-                    <RefreshCw className="w-4 h-4 mr-3 text-slate-400 animate-spin-slow" />
-                    <span className="text-sm">Decoder Daemon</span>
-                  </div>
-                  <div className="flex items-center text-xs text-emerald-400 font-mono">
-                    <CheckCircle2 className="w-3 h-3 mr-1" />
-                    {systemStatus.dump1090}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-          </div>
-        </div>
-      </div>
+      <main ref={mainRef} className="flex-1 p-8 overflow-y-auto relative z-10 custom-scrollbar">
+        {currentView === 'dashboard' && (
+          <DashboardView flights={flights} maxRadarRange={config.max_radar_range_nm} />
+        )}
+        {currentView === 'logs' && (
+          <LogsView logs={logs} logFilters={logFilters} setLogFilters={setLogFilters} />
+        )}
+        {currentView === 'settings' && (
+          <SettingsView 
+            config={config} 
+            handleConfigChange={handleConfigChange} 
+            handleSaveConfig={handleSaveConfig} 
+            displayMode={displayMode} 
+            setDisplayMode={setDisplayMode} 
+            systemStatus={systemStatus} 
+            handleGitPull={handleGitPull} 
+            handleCsvUpdate={handleCsvUpdate} 
+            handleRestartService={handleRestartService} 
+            wifiNetworks={wifiNetworks}
+            onAddWifiNetwork={handleAddWifiNetwork}
+            onRemoveWifiNetwork={handleRemoveWifiNetwork}
+          />
+        )}
+      </main>
     </div>
   );
 }
