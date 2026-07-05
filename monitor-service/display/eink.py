@@ -4,8 +4,9 @@ from PIL import Image, ImageDraw, ImageFont
 import epaper
 
 # Font paths used for E-Ink rendering.
-FONT_LARGE_PATH = "/usr/share/fonts/dejavu-sans-mono-fonts/DejaVuSansMono-Bold.ttf"
-FONT_SMALL_PATH = "/usr/share/fonts/dejavu-sans-mono-fonts/DejaVuSansMono.ttf"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+FONT_LARGE_PATH = os.path.join(BASE_DIR, "fonts", "DejaVuSansMono-Bold.ttf")
+FONT_SMALL_PATH = os.path.join(BASE_DIR, "fonts", "DejaVuSansMono.ttf")
 
 class EInk:
     def __init__(self):

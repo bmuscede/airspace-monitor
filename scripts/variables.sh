@@ -12,6 +12,6 @@ ROOT_DIR="$(readlink -f ${CURRENT_DIR}/../)"
 OS_CACHE_DIR="${ROOT_DIR}/os/cache"
 
 # The stable 64-bit DietPi image for Raspberry Pi
-IMAGE_URL="https://dietpi.com/downloads/images/DietPi_RPi-ARMv8-Bookworm.img.xz"
-ARCHIVE_NAME="DietPi_RPi-ARMv8-Bookworm.img.xz"
-IMG_NAME="DietPi_RPi-ARMv8-Bookworm.img"
+IMAGE_URL="https://dietpi.com/downloads/images/DietPi_RPi234-ARMv8-Trixie.img.xz"
+ARCHIVE_NAME="DietPi_RPi234-ARMv8-Trixie.img.xz"
+IMG_NAME="DietPi_RPi234-ARMv8-Trixie.img"
