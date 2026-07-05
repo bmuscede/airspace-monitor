@@ -1,5 +1,6 @@
 import sys
 import os
+import time
 from PIL import Image, ImageDraw, ImageFont
 import epaper
 
@@ -21,17 +22,28 @@ class EInk:
             self._width = self.display.width
             self._height = self.display.height
         except Exception as e:
+            print(f"CRITICAL ERROR: Failed to initialize E-Ink display: {e}")
             self.display = None
+
+            # Provide fallback dimensions so the script doesn't crash later
+            self._width = 800
+            self._height = 480
 
         # Load fonts once at init so we don't re-read from disk every render cycle.
         self._fontLarge = ImageFont.truetype(FONT_LARGE_PATH, 18)
         self._fontSmall = ImageFont.truetype(FONT_SMALL_PATH, 11)
 
+        # Caching and throttling state
+        self._last_state = None
+        self._last_update_time = 0
+        self._throttle_seconds = 30
+
     def _writeToScreen(self, canvas):
         # Display the image on the screen.
         # Ensure we sleep so we don't burn out the screen.
-        self.display.display(self.display.getbuffer(canvas))
-        self.display.sleep()
+        if self.display is not None:
+            self.display.display(self.display.getbuffer(canvas))
+            self.display.sleep()
 
     def _buildTicketFrame(self, draw):
         # Generate the overall boxes and lines to look like a ticket.
@@ -125,6 +137,12 @@ class EInk:
         return draw
 
     def WriteNoFlight(self):
+        current_time = time.time()
+        if self._last_state == "NO_FLIGHT":
+            return
+        if current_time - self._last_update_time < self._throttle_seconds:
+            return
+
         # Create the canvas.
         # E-ink drivers usually require a '1' mode for 1-bit monochrome black/white.
         canvas = Image.new('1', (self._width, self._height), 255)
@@ -159,7 +177,18 @@ class EInk:
         # Send to the screen
         self._writeToScreen(canvas)
 
+        self._last_state = "NO_FLIGHT"
+        self._last_update_time = time.time()
+
     def WriteFlightData(self, flightNum, origin, dest, elev, heading, gs, aircraftType):
+        current_time = time.time()
+        flight_state = (flightNum, origin, dest, elev, heading, gs, aircraftType)
+        
+        if self._last_state == flight_state:
+            return
+        if current_time - self._last_update_time < self._throttle_seconds:
+            return
+
         # Create the canvas.
         # E-ink drivers usually require a '1' mode for 1-bit monochrome black/white.
         canvas = Image.new('1', (self._width, self._height), 255)
@@ -207,3 +236,6 @@ class EInk:
         
         # Send to the screen
         self._writeToScreen(canvas)
+
+        self._last_state = flight_state
+        self._last_update_time = time.time()
