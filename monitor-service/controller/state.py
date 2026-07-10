@@ -1,7 +1,6 @@
 import threading
 import time
 
-
 class SystemState:
     """
     Thread-safe container for all runtime state.

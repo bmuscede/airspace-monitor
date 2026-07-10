@@ -2,11 +2,15 @@ import json
 import os
 import re
 import subprocess
-import logs
 
+from utils.logs import GetLogger
+
+CONFIG_FILE_NAME = "config.json"
 class ConfigManager:
-    def __init__(self, configPath="config.json"):
-        self.logger = logs.GetLogger("ConfigManager")
+    def __init__(self, configPath=""):
+        configPath = os.path.join(configPath, CONFIG_FILE_NAME)
+
+        self.logger = GetLogger("ConfigManager")
 
         self.configPath = configPath
         self.wpaSupplicantPath = "/etc/wpa_supplicant/wpa_supplicant.conf"

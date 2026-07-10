@@ -6,7 +6,8 @@
 # configurations after you manually flash it.
 # ---------------------------------------------------------
 
-source variables.sh
+CURRENT_DIR="$(readlink -f $(dirname ${BASH_SOURCE[0]}))"
+source "${CURRENT_DIR}/variables.sh"
 
 echo "=============================================="
 echo "  Airspace Monitor SD Card Provisioner (Win)  "

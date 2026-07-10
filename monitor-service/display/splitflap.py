@@ -1,5 +1,4 @@
-import logs
-
+from utils.logs import GetLogger
 
 class SplitFlap:
     """
@@ -13,7 +12,7 @@ class SplitFlap:
     """
 
     def __init__(self):
-        self.logger = logs.GetLogger("SplitFlap")
+        self.logger = GetLogger("SplitFlap")
         self.logger.info("Split-Flap display driver initialized (STUB).")
         self._last_state = None
 

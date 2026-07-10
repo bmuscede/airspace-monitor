@@ -9,14 +9,31 @@ echo "Starting Airspace Monitor automated setup..."
 # Note: Please update the GITHUB_REPO variable if you are not bmuscede.
 GITHUB_REPO="https://github.com/bmuscede/airspace-monitor.git"
 INSTALL_DIR="/opt/airspace-monitor"
+RTL_LIB_DIR="/opt/rtl-libs"
 
 # Update package list and install system dependencies.
 apt-get update
-apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu build-essential git python3 python3-pip python3-venv python3-dev i2c-tools python3-smbus spi-tools nodejs npm
+apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu build-essential git python3 python3-pip python3-venv python3-dev i2c-tools python3-smbus spi-tools nodejs npm swig liblgpio-dev
 
 # Enable I2C and SPI on the Raspberry Pi hardware level
 sed -i 's/#dtparam=i2c_arm=on/dtparam=i2c_arm=on/' /boot/config.txt
 sed -i 's/#dtparam=spi=on/dtparam=spi=on/' /boot/config.txt
+
+# Ensure we have Debian packages setup for RTL v4
+echo "Setting up ADS-B Libraries (RTL v4)..."
+apt-get update
+apt-get install -y libusb-1.0-0-dev git cmake build-essential pkg-config build-essential
+apt-get install -y debhelper
+mkdir -p "${RTL_LIB_DIR}"
+
+cd "${RTL_LIB_DIR}"
+git clone https://github.com/osmocom/rtl-sdr
+cd rtl-sdr
+dpkg-buildpackage -b --no-sign
+cd ..
+dpkg -i librtlsdr0_*.deb
+dpkg -i librtlsdr-dev_*.deb
+dpkg -i rtl-sdr_*.deb
 
 # Install the ADS-B Decoder (readsb)
 echo "Installing readsb (ADS-B Decoder)..."

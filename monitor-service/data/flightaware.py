@@ -1,10 +1,12 @@
 import requests
 import time
-import logs
+import math
+
+from utils.logs import GetLogger
 
 class FlightAwareClient:
     def __init__(self, apiKey: str = "", apiURL: str = "", cacheTTL: int = 3600):
-        self.logger = logs.GetLogger("FlightAware")
+        self.logger = GetLogger("FlightAware")
 
         self.apiKey = apiKey
         self.apiURL = apiURL
@@ -61,6 +63,44 @@ class FlightAwareClient:
         except Exception as e:
             self.logger.error(f"Received error from FlightAware: {e}")
             return "???", "???"
+
+    def GetNearbyFlights(self, lat: float, lon: float, radius_nm: float):
+        """
+        Simulates an antenna by querying FlightAware for flights 
+        within a bounding box around the home coordinates.
+        """
+        if not self.apiKey:
+            return []
+
+        if not self.apiURL:
+            self.logger.error("No FlightAware API URL configured.")
+            return "???", "???"
+    
+        # Convert radius from nautical miles to degrees for the bounding box.
+        lat_offset = radius_nm / 60.0
+        lon_offset = radius_nm / (60.0 * math.cos(math.radians(lat)))
+        min_lat = lat - lat_offset
+        max_lat = lat + lat_offset
+        min_lon = lon - lon_offset
+        max_lon = lon + lon_offset
+
+        # Create the bounding box using the -latlong keyword.
+        # We MUST wrap the four coordinates in literal double quotes so FlightAware parses them as one block.
+        search_query = f'-latlong "{min_lat} {min_lon} {max_lat} {max_lon}"'
+        search_query += " -filter airline"
+        params = {
+            "query": search_query
+        }
+        headers = {"x-apikey": self.apiKey}
+        
+        try:
+            response = requests.get(f"{self.apiURL}/flights/search", headers=headers, params=params)
+            response.raise_for_status()
+            data = response.json()
+            return data.get("flights", [])
+        except Exception as e:
+            print(f"Radar sweep failed: {e}")
+            return []
 
     def GetRouteFromCache(self, flightNum: str):
         """

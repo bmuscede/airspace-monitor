@@ -1,6 +1,5 @@
 import math
 
-
 def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """
     Calculates the great-circle distance between two points

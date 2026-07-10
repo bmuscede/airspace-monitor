@@ -8,7 +8,8 @@
 # Be careful of which SD card you select!!!
 # ---------------------------------------------------------
 
-source variables.sh
+CURRENT_DIR="$(readlink -f $(dirname ${BASH_SOURCE[0]}))"
+source "${CURRENT_DIR}/variables.sh"
 
 echo "=============================================="
 echo "  Airspace Monitor SD Card Provisioner        "

@@ -1,14 +1,15 @@
 import os
 import csv
 import requests
-import logs
+
+from utils.logs import GetLogger
 
 # TODO: Unhardcode this value!
 DB_URL = "https://opensky-network.org/datasets/metadata/aircraftDatabase.csv"
 
 class AircraftDatabase:
     def __init__(self, dbPath: str):
-        self.logger = logs.GetLogger("AircraftDatabase")
+        self.logger = GetLogger("AircraftDatabase")
 
         self.dbPath = dbPath
         self.dbURL = DB_URL

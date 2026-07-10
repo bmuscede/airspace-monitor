@@ -7,8 +7,9 @@
 # ---------------------------------------------------------
 
 # Common directories for this repo.
-CURRENT_DIR="$(readlink -f $(dirname ${BASH_SOURCE[0]}))"
 ROOT_DIR="$(readlink -f ${CURRENT_DIR}/../)"
+MONITOR_SERVICE_DIR="${ROOT_DIR}/monitor-service"
+MONITOR_DASHBOARD_DIR="${ROOT_DIR}/monitor-dashboard"
 OS_CACHE_DIR="${ROOT_DIR}/os/cache"
 
 # The stable 64-bit DietPi image for Raspberry Pi

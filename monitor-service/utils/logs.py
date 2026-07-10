@@ -1,21 +1,26 @@
 import logging
 from logging.handlers import RotatingFileHandler
+import os
 
-def setupLogger(name="AirspaceMonitor", log_file="system.log", max_mb=50, backup_count=2):
+LOG_FILE_NAME = "system.log"
+
+def InitializeLogging(name="AirspaceMonitor", log_path="", max_mb=50, backup_count=2):
     """
     Sets up a rolling logger that caps at max_mb and keeps backup_count old files.
     """
+    log_path = os.path.join(log_path, LOG_FILE_NAME)
+
     logger = logging.getLogger(name)
     logger.setLevel(logging.INFO)
     
-    # Avoid adding multiple handlers if this is imported multiple times
+    # Avoid adding multiple handlers.
     if not logger.handlers:
         
         # Convert megabytes to bytes
         max_bytes = max_mb * 1024 * 1024 
         
         file_handler = RotatingFileHandler(
-            log_file, 
+            log_path, 
             maxBytes=max_bytes, 
             backupCount=backup_count
         )
@@ -34,9 +39,6 @@ def setupLogger(name="AirspaceMonitor", log_file="system.log", max_mb=50, backup
         logger.addHandler(console_handler)
         
     return logger
-
-# Initialize the base logger once when this module is first imported
-setupLogger("AirspaceMonitor")
 
 def GetLogger(childName: str):
     """

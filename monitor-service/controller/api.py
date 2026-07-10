@@ -2,13 +2,14 @@ import subprocess
 from fastapi import FastAPI, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import logs
+
+from utils.logs import GetLogger
 
 # Module-level reference to the Controller.
 # Set by controller.py at startup before uvicorn.run().
 controller = None
 
-logger = logs.GetLogger("API")
+logger = GetLogger("API")
 
 app = FastAPI(title="Airspace Monitor Service API")
 
