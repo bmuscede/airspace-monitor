@@ -4,3 +4,4 @@ __pycache__/
 *.log
 config.json
 os/cache/
+.tmp.png

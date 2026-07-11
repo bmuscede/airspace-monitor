@@ -21,6 +21,9 @@ class ConfigManager:
             "flightaware_url": "https://aeroapi.flightaware.com/aeroapi",
             "flightaware_api_key": "",
             "cache_ttl": 3600,
+            "openweathermap_url": "https://api.openweathermap.org/data/2.5/forecast",
+            "openweathermap_api_key": "",
+            "weather_ttl": 3600,
             "home_lat": 0.0,
             "home_lon": 0.0,
             "max_radar_range_nm": 50

@@ -1,4 +1,5 @@
 import math
+import cairosvg
 
 def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """
@@ -23,7 +24,6 @@ def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
     return R * c
 
-
 def bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """
     Calculates the initial bearing (forward azimuth) from point 1 to point 2.
@@ -42,3 +42,55 @@ def bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     compass_bearing = (math.degrees(initial_bearing) + 360) % 360
 
     return round(compass_bearing, 1)
+
+def get_svg_filename_from_code(weather_code):
+     owm_code_to_svg_map = {
+          # Clear Sky
+          "01d": "clear-day.svg",
+          "01n": "clear-night.svg",
+
+          # Few Clouds
+          "02d": "partly-cloudy-day.svg",
+          "02n": "partly-cloudy-night.svg",
+
+          # Scattered Clouds
+          "03d": "cloudy.svg",  
+          "03n": "cloudy.svg",
+
+          # Broken/Overcast Clouds
+          "04d": "overcast-day.svg", 
+          "04n": "overcast-night.svg",
+
+          # Shower Rain
+          "09d": "drizzle.svg",  
+          "09n": "drizzle.svg",
+
+          # Rain
+          "10d": "rain.svg",     
+          "10n": "rain.svg",
+
+          # Thunderstorm
+          "11d": "thunderstorm.svg",
+          "11n": "thunderstorm.svg",
+          
+          # Snow
+          "13d": "snow.svg",
+          "13n": "snow.svg",
+          
+          # Mist / Fog
+          "50d": "mist.svg",
+          "50n": "mist.svg",
+     }
+
+     if weather_code in owm_code_to_svg_map:
+          return owm_code_to_svg_map[weather_code]
+     
+     return "not-available.svg"
+
+def svg_to_png(svg_path, png_path, output_width=None, output_height=None, dpi=96):
+    try:
+          # Use the cairosvg library to convert to PNG
+          cairosvg.svg2png(url=str(svg_path), write_to=str(png_path), output_width=output_width, output_height=output_height, dpi=dpi)
+          return True
+    except Exception:
+          return False

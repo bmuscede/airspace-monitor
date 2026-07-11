@@ -5,8 +5,9 @@ from display.eink import EInk
 
 # Font paths (Reused from your EInk file)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-FONT_LARGE_PATH = os.path.join(BASE_DIR, "fonts", "DejaVuSansMono-Bold.ttf")
-FONT_SMALL_PATH = os.path.join(BASE_DIR, "fonts", "DejaVuSansMono.ttf")
+DATA_DIR = os.path.join(BASE_DIR, "..", "..", "data")
+FONT_BOLD_PATH = os.path.join(DATA_DIR, "fonts", "DejaVuSansMono-Bold.ttf")
+FONT_REGULAR_PATH = os.path.join(DATA_DIR, "fonts", "DejaVuSansMono.ttf")
 
 class DevDisplay(EInk):
     def __init__(self, mode="E-Ink"):
@@ -15,17 +16,16 @@ class DevDisplay(EInk):
         self._width = 800
         self._height = 480
         
-        # Load fonts exactly as EInk expects them for the ticket layout.
-        self._fontLarge = ImageFont.truetype(FONT_LARGE_PATH, 54)
-        self._fontSmall = ImageFont.truetype(FONT_SMALL_PATH, 28)
-        
-        # Load a massive font specifically for simulating the Split-Flap cards
-        self._fontFlap = ImageFont.truetype(FONT_LARGE_PATH, 40)
+        # Load fonts.
+        self._load_fonts()
 
         # Caching and throttling state for the EInk display.
         self._last_state = None
         self._last_update_time = 0
         self._throttle_seconds = 30
+
+        # Load the colour/livery cache into memory.
+        self._load_aircraft_colour_list()
 
         # Set up the Tkinter Window
         self.root = tk.Tk()
@@ -39,6 +39,12 @@ class DevDisplay(EInk):
         
         # Force the window to draw immediately (non-blocking)
         self.root.update()
+
+    def _load_fonts(self):
+        super()._load_fonts()
+
+        # Load the splitflap font here.
+        self._fontFlap = ImageFont.truetype(FONT_BOLD_PATH, 40)
 
     def SetMode(self, mode):
         """Called to change thn the dae mode of the active display."""
@@ -73,9 +79,9 @@ class DevDisplay(EInk):
                 f"{aircraftType[:14]:^14}"
             ])
 
-    def WriteNoFlight(self):
+    def WriteNoFlight(self, forecast_data):
         if self.mode == "E-Ink":
-            super().WriteNoFlight()
+            super().WriteNoFlight(forecast_data)
         else:
             self._draw_splitflap_sim([
                 "NO FLIGHTS".center(14),

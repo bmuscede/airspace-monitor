@@ -8,6 +8,7 @@ import sys
 from controller.state import SystemState
 from data.aircraft_database import AircraftDatabase
 from data.flightaware import FlightAwareClient
+from data.openweathermap import OpenweathermapClient
 from display.dev import DevDisplay
 from utils.config import ConfigManager
 from utils.logs import GetLogger
@@ -37,6 +38,11 @@ class Controller:
             apiKey=self.configManager.Get("flightaware_api_key", ""),
             apiURL=self.configManager.Get("flightaware_url", ""),
             cacheTTL=self.configManager.Get("cache_ttl", 3600),
+        )
+        self.weatherClient = OpenweathermapClient(
+            api_key=self.configManager.Get("openweathermap_api_key", ""),
+            api_url=self.configManager.Get("openweathermap_url", ""),
+            weather_ttl=self.configManager.Get("weather_ttl", 3600),
         )
 
         # Display drivers.
@@ -310,7 +316,11 @@ class Controller:
         driver = self.eink if mode == "E-Ink" else self.splitflap
 
         if aircraft is None:
-            driver.WriteNoFlight()
+            # Fetch the weather and write to the flight.
+            home_lat = self.configManager.Get("home_lat", 0.0)
+            home_lon = self.configManager.Get("home_lon", 0.0)
+            forecast = self.weatherClient.get_forecast(home_lat, home_lon)
+            driver.WriteNoFlight(forecast)
             return
 
         driver.WriteFlightData(
