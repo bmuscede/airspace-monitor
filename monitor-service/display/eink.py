@@ -26,10 +26,9 @@ WEATHER_PATH = os.path.join(DATA_DIR, "weather")
 GENERIC_AIRLINE_CODE = "generic"
 
 # TODO: Overall some colours are placed here. We should fix this.
-COLOR_GRAY = (160, 160, 160)
-COLOR_GREEN = (0, 153, 51)
-COLOR_BLUE = (0, 51, 153)
-COLOR_ORANGE = (255, 102, 0)  
+COLOR_GREEN = (0, 255, 0)
+COLOR_BLUE = (0, 0, 255)
+COLOR_ORANGE = (255, 128, 0)  
 
 class EInk:
     def __init__(self):
@@ -256,7 +255,7 @@ class EInk:
 
     def _draw_idle_weather_section(self, draw, canvas, forecast_data, high_colour, low_colour):
         draw.text((30, 105), "4-DAY WEATHER FORECAST", font=self._fontIdleHeader, fill=(0,0,0))
-        draw.text((30, 130), f"FOR {forecast_data['location_name'].upper()}", font=self._fontIdleRowBold, fill=COLOR_GRAY)
+        draw.text((30, 130), f"FOR {forecast_data['location_name'].upper()}", font=self._fontIdleRowBold, fill=(0,0,0))
     
         start_y = 175
         row_height = 70
@@ -292,7 +291,7 @@ class EInk:
             
             # Dividing line moved to bottom of row (y + 68) so icons don't clip through
             if i < 3:
-                draw.line([(30, y + 68), (430, y + 68)], fill=COLOR_GRAY, width=1)
+                draw.line([(30, y + 68), (430, y + 68)], fill=(0,0,0), width=1)
 
     def _draw_idle_statistics_section(self, draw):
         draw.text((485, 105), "RECEIVER", font=self._fontIdleHeader, fill=(0,0,0))
@@ -305,12 +304,12 @@ class EInk:
             """Draws a retro air traffic control radar sweep."""
             # Outer arcs
             draw.arc([cx - radius, cy - radius, cx + radius, cy + radius], 180, 0, fill=(0,0,0), width=2)
-            draw.arc([cx - radius*0.6, cy - radius*0.6, cx + radius*0.6, cy + radius*0.6], 180, 0, fill=COLOR_GRAY, width=1)
+            draw.arc([cx - radius*0.6, cy - radius*0.6, cx + radius*0.6, cy + radius*0.6], 180, 0, fill=(0,0,0), width=1)
             # Base line
             draw.line([(cx - radius - 5, cy), (cx + radius + 5, cy)], fill=(0,0,0), width=2)
             # Grid lines
-            draw.line([(cx, cy), (cx - radius*0.7, cy - radius*0.7)], fill=COLOR_GRAY, width=1)
-            draw.line([(cx, cy), (cx + radius*0.7, cy - radius*0.7)], fill=COLOR_GRAY, width=1)
+            draw.line([(cx, cy), (cx - radius*0.7, cy - radius*0.7)], fill=(0,0,0), width=1)
+            draw.line([(cx, cy), (cx + radius*0.7, cy - radius*0.7)], fill=(0,0,0), width=1)
             # Radar Sweep Wedge (Green fill)
             draw.polygon([(cx, cy), (cx + radius*0.8, cy - radius*0.5), (cx + radius*0.4, cy - radius*0.9)], fill=COLOR_GREEN)
             # Center transmitter antenna tower
@@ -318,7 +317,7 @@ class EInk:
             
         draw_radar_icon(draw, cx=720, cy=150, radius=45)
         
-        draw.line([(485, 165), (765, 165)], fill=COLOR_GRAY, width=2)
+        draw.line([(485, 165), (765, 165)], fill=(0,0,0), width=2)
         
         # Stats Grid - Right Justification Logic
         stats_y = 185
@@ -507,9 +506,34 @@ class EInk:
         # Write the barcode at the bottom.
         self._draw_procedural_barcode(draw, stub_x + 30, 360, height=75, seed_text=flight_num)
 
+    def _prepare_for_epd(canvas):
+        """
+        Forces the PIL image to snap to the exact 7-color ACeP palette
+        without applying messy checkerboard dithering.
+        """
+        # Create a 7-color palette image
+        pal_image = Image.new("P", (1, 1))
+        
+        # Corresponds to Waveshare's 7 colour epd palette.
+        palette = [
+            0, 0, 0,          # 0: Black
+            255, 255, 255,    # 1: White
+            0, 255, 0,        # 2: Green
+            0, 0, 255,        # 3: Blue
+            255, 0, 0,        # 4: Red
+            255, 255, 0,      # 5: Yellow
+            255, 128, 0,      # 6: Orange
+        ] + [0] * (256 * 3 - 21)
+        pal_image.putpalette(palette)
+        
+        #  Ensure we don't dither when converting.
+        quantized_image = canvas.quantize(palette=pal_image, dither=Image.NONE)
+        return quantized_image.convert("RGB")
+
     def _writeToScreen(self, canvas):
         if self._display is not None:
-            self._display.display(self._display.getbuffer(canvas))
+            clean_image = self._prepare_for_epd(canvas)
+            self._display.display(self._display.getbuffer(clean_image))
             self._display.sleep()
 
     def WriteNoFlight(self, forecast_data=None):
@@ -529,13 +553,13 @@ class EInk:
         
         # Next, if the forecast data is 
         # Creates a new canvas and drawing.
-        canvas = Image.new('RGB', (self._width, self._height), (245, 245, 240))
+        canvas = Image.new('RGB', (self._width, self._height), (255, 255, 255))
         draw = ImageDraw.Draw(canvas)
 
         # Build our colour palette based on the idle section.
         # TODO: Figure out a better way for these.
-        COLOUR_BLUE = (0, 51, 153)
-        COLOUR_ORANGE = (255, 102, 0)
+        COLOUR_BLUE = (0, 0, 255)
+        COLOUR_ORANGE = (255, 128, 0)
 
         # Build the initial idle frame.
         self._draw_idle_frame(draw, COLOUR_BLUE, forecast_data['city_name'] )

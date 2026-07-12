@@ -13,7 +13,7 @@ RTL_LIB_DIR="/opt/rtl-libs"
 
 # Update package list and install system dependencies.
 apt-get update
-apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu build-essential git python3 python3-pip python3-venv python3-dev i2c-tools python3-smbus spi-tools nodejs npm swig liblgpio-dev
+apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu build-essential git python3 python3-pip python3-venv python3-dev i2c-tools python3-smbus spi-tools nodejs npm swig liblgpio-dev python3-tk libcairo2
 
 # Enable I2C and SPI on the Raspberry Pi hardware level
 sed -i 's/#dtparam=i2c_arm=on/dtparam=i2c_arm=on/' /boot/config.txt

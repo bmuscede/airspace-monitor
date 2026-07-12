@@ -324,13 +324,13 @@ class Controller:
             return
 
         driver.WriteFlightData(
-            flightNum=aircraft.get("flight", "???"),
+            flight_num=aircraft.get("flight", "???"),
             origin=aircraft.get("origin", "???"),
             dest=aircraft.get("destination", "???"),
             elev=aircraft.get("altitude"),
             heading=aircraft.get("heading"),
             gs=aircraft.get("speed"),
-            aircraftType=aircraft.get("type", "???"),
+            aircraft_type=aircraft.get("type", "???"),
         )
 
     def GetAircraft(self):
