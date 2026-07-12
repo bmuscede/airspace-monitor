@@ -22,7 +22,7 @@ FONT_BOLD_PATH = os.path.join(DATA_DIR, "fonts", "DejaVuSansMono-Bold.ttf")
 FONT_REGULAR_PATH = os.path.join(DATA_DIR, "fonts", "DejaVuSansMono.ttf")
 COLOUR_PATH = os.path.join(DATA_DIR, "aircraft_colours.csv")
 LOGO_PATH = os.path.join(DATA_DIR, "logos")
-WEATHER_PATH = os.path.join(DATA_DIR, "weather")
+WEATHER_PATH = os.path.join(DATA_DIR, "weather-mono")
 GENERIC_AIRLINE_CODE = "generic"
 
 # TODO: Overall some colours are placed here. We should fix this.
@@ -506,7 +506,7 @@ class EInk:
         # Write the barcode at the bottom.
         self._draw_procedural_barcode(draw, stub_x + 30, 360, height=75, seed_text=flight_num)
 
-    def _prepare_for_epd(canvas):
+    def _prepare_for_epd(self, canvas):
         """
         Forces the PIL image to snap to the exact 7-color ACeP palette
         without applying messy checkerboard dithering.
