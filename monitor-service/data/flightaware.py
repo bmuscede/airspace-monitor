@@ -44,8 +44,13 @@ class FlightAwareClient:
             # Deconstruct the payload. We need to just take the first flight that matches and cache it.
             if 'flights' in data and len(data['flights']) > 0:
                 flight = data['flights'][0]
-                origin = flight.get('origin', {}).get('code_iata', '???')
-                destination = flight.get('destination', {}).get('code_iata', '???')
+
+                # Get the origin -> destination.
+                # Aeroapi fills in fields even if they don't exist which means that we have to handle both null and non-existent entries.
+                origin_data = flight.get('origin', {})
+                origin = '???' if origin_data is None else origin_data.get('code_iata', '???')
+                destination_data = flight.get('destination', {}).get('code_iata', '???')
+                destination = '???' if destination_data is None else destination_data.get('code_iata', '???')
 
                 currentTime = time.time()
 
