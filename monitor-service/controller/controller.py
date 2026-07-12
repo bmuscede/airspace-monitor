@@ -137,7 +137,7 @@ class Controller:
 
     def _read_aircraft(self):
         """
-        Reads /run/dump1090-fa/aircraft.json, parses it, calculates
+        Reads /run/readsb/aircraft.json, parses it, calculates
         distance/bearing from home, and filters to aircraft within range.
         
         Returns a normalised list of aircraft dicts.
@@ -316,11 +316,20 @@ class Controller:
         driver = self.eink if mode == "E-Ink" else self.splitflap
 
         if aircraft is None:
-            # Fetch the weather and write to the flight.
+            # Fetch the weather information.
             home_lat = self.configManager.Get("home_lat", 0.0)
             home_lon = self.configManager.Get("home_lon", 0.0)
             forecast = self.weatherClient.get_forecast(home_lat, home_lon)
-            driver.WriteNoFlight(forecast)
+
+            # Pass bundle information to write no flight.
+            state_information = {
+                "readsb_connected": self.state.readsb_connected,
+                "range":  self.configManager.Get("max_radar_range_nm", 50),
+                "uptime": self.state.uptime,
+                "daily_seen": self.state.daily_aircraft_seen,
+                "total_seen": self.state.total_aircraft_seen
+            }
+            driver.WriteNoFlight(state_information, forecast)
             return
 
         driver.WriteFlightData(

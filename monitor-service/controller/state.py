@@ -1,5 +1,6 @@
 import threading
 import time
+from datetime import datetime
 
 class SystemState:
     """
@@ -13,6 +14,7 @@ class SystemState:
     def __init__(self):
         self._lock = threading.Lock()
 
+        self._start_time = datetime.now()
         self._system_running = False
         self._display_mode = "E-Ink"
         self._current_aircraft = None
@@ -21,7 +23,21 @@ class SystemState:
         self._last_update = 0.0
         self._readsb_connected = False
 
+        self._count_day = datetime.now()
+        self._total_aircraft_count = 0
+        self._daily_unique_aircraft = set()
+
     # --- Getters ---
+
+    @property
+    def uptime(self):
+        current_time = datetime.now()
+        with self._lock:
+            delta = current_time - self._start_time
+            days = delta.days
+            hours = delta.seconds // 3600
+
+            return f"{days} d, {hours} hrs"
 
     @property
     def system_running(self):
@@ -58,6 +74,19 @@ class SystemState:
     def readsb_connected(self):
         with self._lock:
             return self._readsb_connected
+
+    @property
+    def daily_aircraft_seen(self):
+        with self._lock:
+            if datetime.now().date() != self._count_day.date():
+                return 0
+            else:
+                return len(self._daily_unique_aircraft)
+
+    @property
+    def total_aircraft_seen(self):
+        with self._lock:
+            return len(self._daily_unique_aircraft) + self._total_aircraft_count
 
     # --- Setters ---
 
@@ -98,6 +127,14 @@ class SystemState:
             self._closest_aircraft = dict(closest) if closest else None
             self._last_update = time.time()
 
+            # Check if we need to purge the daily list.
+            if datetime.now().date() != self._count_day.date():
+                self._total_aircraft_count += len(self._daily_unique_aircraft)
+                self._daily_unique_aircraft = set()
+                self._count_day = datetime.now()
+            for aircraft in all_aircraft:
+                self._daily_unique_aircraft.add(aircraft.get("flight", "???"))
+            
     # --- Toggle ---
 
     def toggle_display_mode(self) -> str:

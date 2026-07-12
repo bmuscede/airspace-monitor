@@ -9,6 +9,7 @@ import pathlib
 
 from PIL import Image, ImageDraw, ImageFont
 
+from utils.logs import GetLogger
 from utils.utils import svg_to_png, get_svg_filename_from_code
 
 try:
@@ -26,12 +27,16 @@ WEATHER_PATH = os.path.join(DATA_DIR, "weather-mono")
 GENERIC_AIRLINE_CODE = "generic"
 
 # TODO: Overall some colours are placed here. We should fix this.
-COLOR_GREEN = (0, 255, 0)
-COLOR_BLUE = (0, 0, 255)
-COLOR_ORANGE = (255, 128, 0)  
+COLOUR_GREEN = (0, 255, 0)
+COLOUR_BLUE = (0, 0, 255)
+COLOUR_RED = (255, 0, 0)
+COLOUR_ORANGE = (255, 128, 0)  
 
 class EInk:
     def __init__(self):
+        self.logger = GetLogger("EInk")
+        self.logger.debug("Starting EInk display driver initialization...")
+
         try:
             epd_module = epaper.epaper('epd7in3f')
             self._display = epd_module.EPD()
@@ -42,7 +47,7 @@ class EInk:
             self._width = self._display.width
             self._height = self._display.height
         except Exception as e:
-            print(f"CRITICAL ERROR: Failed to initialize E-Ink display: {e}")
+            self.logger.error("Failed to initialize EInk display: {e}")
             self._display = None
 
             self._width = 800
@@ -61,19 +66,22 @@ class EInk:
         # Last, load the colour/livery cache into memory.
         self._load_aircraft_colour_list()
 
+        if self._display is not None:
+            self.logger.info("EInk display driver initialized.")
+
     def _load_fonts(self):
         # Load fonts for the flight display.
         self._fontFlightLarge = ImageFont.truetype(FONT_BOLD_PATH, 54)
-        self._fontFlightSmall = ImageFont.truetype(FONT_REGULAR_PATH, 20)
-        self._fontFlightTiny = ImageFont.truetype(FONT_REGULAR_PATH, 14)
+        self._fontFlightSmall = ImageFont.truetype(FONT_BOLD_PATH, 20)
+        self._fontFlightTiny = ImageFont.truetype(FONT_BOLD_PATH, 14)
 
         # Load fonts for the idle display.
         self._fontIdleTitle = ImageFont.truetype(FONT_BOLD_PATH, 32)
-        self._fontIdleSubTitle = ImageFont.truetype(FONT_REGULAR_PATH, 14)
+        self._fontIdleSubTitle = ImageFont.truetype(FONT_BOLD_PATH, 14)
         self._fontIdleHeader = ImageFont.truetype(FONT_BOLD_PATH, 24)
         self._fontIdleRowBold = ImageFont.truetype(FONT_BOLD_PATH, 18)
-        self._fontIdleRowRegular = ImageFont.truetype(FONT_REGULAR_PATH, 16)
-        self._fontIdleRowSmall = ImageFont.truetype(FONT_REGULAR_PATH, 14)
+        self._fontIdleRowRegular = ImageFont.truetype(FONT_BOLD_PATH, 16)
+        self._fontIdleRowSmall = ImageFont.truetype(FONT_BOLD_PATH, 14)
 
     def _load_aircraft_colour_list(self, path=COLOUR_PATH):
         """
@@ -106,17 +114,17 @@ class EInk:
                         }
         
             self._colour_cache = tempColourCache
-            print(f"Successfully loaded {len(tempColourCache)} aircraft colours into memory.")
+            self.logger.info(f"Successfully loaded {len(tempColourCache)} airline colours into memory.")
 
         except Exception as e:
-            print(f"Error: Failed to load aircraft colour file: {e}")
+            self.logger.error(f"Error: Failed to load aircraft colour file: {e}")
             self._colour_cache = {}
         
         # Last, insert the fallback value.
         # This will be used if we can't load.
         self._colour_cache[GENERIC_AIRLINE_CODE] = {
             "name": "GENERAL AVIATION",
-            "primary": (80, 80, 80),    # Dark Gray
+            "primary": COLOUR_GREEN,     # Green
             "accent": (0, 0, 0),        # Black
             "logo": "generic.png"      
         }
@@ -279,7 +287,7 @@ class EInk:
                     forecast_icon = Image.open(temp_png_path).convert("RGBA")
                     canvas.paste(forecast_icon, (icon_x, icon_y), mask=forecast_icon)
                 except Exception as e:
-                    print(f"Error pasting icon: {e}")
+                    self.logger.error(f"Failure adding weather icon to image: {e}")
                 finally:
                     if temp_png_path.exists():
                         temp_png_path.unlink()
@@ -293,7 +301,7 @@ class EInk:
             if i < 3:
                 draw.line([(30, y + 68), (430, y + 68)], fill=(0,0,0), width=1)
 
-    def _draw_idle_statistics_section(self, draw):
+    def _draw_idle_statistics_section(self, draw, state_information):
         draw.text((485, 105), "RECEIVER", font=self._fontIdleHeader, fill=(0,0,0))
         draw.text((485, 130), "STATISTICS", font=self._fontIdleHeader, fill=(0,0,0))
         
@@ -311,7 +319,7 @@ class EInk:
             draw.line([(cx, cy), (cx - radius*0.7, cy - radius*0.7)], fill=(0,0,0), width=1)
             draw.line([(cx, cy), (cx + radius*0.7, cy - radius*0.7)], fill=(0,0,0), width=1)
             # Radar Sweep Wedge (Green fill)
-            draw.polygon([(cx, cy), (cx + radius*0.8, cy - radius*0.5), (cx + radius*0.4, cy - radius*0.9)], fill=COLOR_GREEN)
+            draw.polygon([(cx, cy), (cx + radius*0.8, cy - radius*0.5), (cx + radius*0.4, cy - radius*0.9)], fill=COLOUR_GREEN)
             # Center transmitter antenna tower
             draw.polygon([(cx - 3, cy), (cx + 3, cy), (cx, cy - 12)], fill=(0,0,0))
             
@@ -325,34 +333,35 @@ class EInk:
         right_edge_x = 760
         
         # Status
+        status_text = "ACTIVE" if state_information.get('readsb_connected', False) else "NOT RUNNING"
+        status_colour = COLOUR_GREEN if status_text == "ACTIVE" else COLOUR_RED
         draw.text((485, stats_y), "Status:", font=self._fontIdleRowRegular, fill=(0,0,0))
-        # Apply Right Justification
-        x_rj = self._get_right_justified_x(draw, "ACTIVE", self._fontIdleRowBold, right_edge_x)
-        draw.text((x_rj, stats_y), "ACTIVE", font=self._fontIdleRowBold, fill=COLOR_GREEN)
+        x_rj = self._get_right_justified_x(draw, status_text, self._fontIdleRowBold, right_edge_x)
+        draw.text((x_rj, stats_y), status_text, font=self._fontIdleRowBold, fill=status_colour)
         
-        # Signal Strength
-        draw.text((485, stats_y + spacing), "Signal Strength:", font=self._fontIdleRowRegular, fill=(0,0,0))
-        # Apply Right Justification
-        x_rj = self._get_right_justified_x(draw, "GOOD", self._fontIdleRowBold, right_edge_x)
-        draw.text((x_rj, stats_y + spacing), "GOOD", font=self._fontIdleRowBold, fill=COLOR_ORANGE)
+        # Radar Range
+        status_text = f"{state_information.get('range', 50)}NM"
+        draw.text((485, stats_y + spacing), "Radar Range:", font=self._fontIdleRowRegular, fill=(0,0,0))
+        x_rj = self._get_right_justified_x(draw, status_text, self._fontIdleRowBold, right_edge_x)
+        draw.text((x_rj, stats_y + spacing), status_text, font=self._fontIdleRowBold, fill=COLOUR_ORANGE)
         
         # Up-Time
+        uptime_text = state_information.get('uptime', "Unknown")
         draw.text((485, stats_y + (spacing * 2)), "Up-Time:", font=self._fontIdleRowRegular, fill=(0,0,0))
-        # Apply Right Justification
-        x_rj = self._get_right_justified_x(draw, "14d, 6 hrs", self._fontIdleRowRegular, right_edge_x)
-        draw.text((x_rj, stats_y + (spacing * 2)), "14d, 6 hrs", font=self._fontIdleRowRegular, fill=(0,0,0))
-        
-        # Last Sync
-        draw.text((485, stats_y + (spacing * 3)), "Today's Flights:", font=self._fontIdleRowRegular, fill=(0,0,0))
-        # Apply Right Justification
-        x_rj = self._get_right_justified_x(draw, "3", self._fontIdleRowBold, right_edge_x)
-        draw.text((x_rj, stats_y + (spacing * 3)), "3", font=self._fontIdleRowBold, fill=COLOR_BLUE)
+        x_rj = self._get_right_justified_x(draw, uptime_text, self._fontIdleRowRegular, right_edge_x)
+        draw.text((x_rj, stats_y + (spacing * 2)), uptime_text, font=self._fontIdleRowRegular, fill=(0,0,0))
         
         # Total Flights Today
+        flights_today = state_information.get('daily_seen', 0)
+        draw.text((485, stats_y + (spacing * 3)), "Today's Flights:", font=self._fontIdleRowRegular, fill=(0,0,0))
+        x_rj = self._get_right_justified_x(draw, f"{flights_today}", self._fontIdleRowBold, right_edge_x)
+        draw.text((x_rj, stats_y + (spacing * 3)), f"{flights_today}", font=self._fontIdleRowBold, fill=COLOUR_BLUE)
+        
+        # Total Flights All Time
+        flights_total = state_information.get('total_seen', 0)
         draw.text((485, stats_y + (spacing * 4)), "Total Flights:", font=self._fontIdleRowRegular, fill=(0,0,0))
-        # Apply Right Justification
-        x_rj = self._get_right_justified_x(draw, "28", self._fontIdleRowBold, right_edge_x)
-        draw.text((x_rj, stats_y + (spacing * 4)), "28", font=self._fontIdleRowBold, fill=COLOR_BLUE)
+        x_rj = self._get_right_justified_x(draw, f"{flights_total}", self._fontIdleRowBold, right_edge_x)
+        draw.text((x_rj, stats_y + (spacing * 4)), f"{flights_total}", font=self._fontIdleRowBold, fill=COLOUR_BLUE)
 
     def _draw_idle_tooltext_section(self, draw, tooltip_colour):
         # Dimensions for tooltext box.
@@ -370,8 +379,8 @@ class EInk:
         subtitle_text = "Searching..." 
         top_x = self._get_centered_x(draw, top_text, self._fontIdleRowSmall, area_start=box_x1, area_width=(box_x2 - box_x1))
         sub_x = self._get_centered_x(draw, subtitle_text, self._fontIdleRowBold, area_start=box_x1, area_width=(box_x2 - box_x1))
-        draw.text((top_x, box_y1 + 10), top_text, font=self._fontIdleRowSmall, fill=(255,255,255))
-        draw.text((sub_x, box_y1 + 34), subtitle_text, font=self._fontIdleRowBold, fill=(255,255,255))
+        draw.text((top_x, box_y1 + 10), top_text, font=self._fontIdleRowSmall, fill=(0,0,0))
+        draw.text((sub_x, box_y1 + 34), subtitle_text, font=self._fontIdleRowBold, fill=(0,0,0))
     
     def _draw_ticket_frame(self, draw, primary_colour):
         """
@@ -496,7 +505,8 @@ class EInk:
             logo = Image.open(logo_path).convert("RGBA")
             logo = logo.resize((80, 80))
             canvas.paste(logo, (int(stub_x + 75), 140), mask=logo) 
-        except FileNotFoundError:
+        except FileNotFoundError as e:
+            self.logger.error(f"Error: Failed to load aircraft logo: {e}")
             pass
 
         # Write the aircraft information below the logo.
@@ -532,11 +542,13 @@ class EInk:
 
     def _writeToScreen(self, canvas):
         if self._display is not None:
+            self.logger.debug("Preparing new image for EInk display...")
             clean_image = self._prepare_for_epd(canvas)
             self._display.display(self._display.getbuffer(clean_image))
             self._display.sleep()
+            self.logger.info("EInk display updated with new image. Going to sleep.")
 
-    def WriteNoFlight(self, forecast_data=None):
+    def WriteNoFlight(self, state_information, forecast_data=None):
         # Check if we should update the screen before beginning.
         # TODO: This will refuse to update once set. We need a better way to check this for a change.
         flight_state = "NO_FLIGHT"
@@ -566,7 +578,7 @@ class EInk:
 
         # Next, draw the three main sections.
         self._draw_idle_weather_section(draw, canvas, forecast_data, COLOUR_ORANGE, COLOUR_BLUE)
-        self._draw_idle_statistics_section(draw)
+        self._draw_idle_statistics_section(draw, state_information)
         self._draw_idle_tooltext_section(draw, COLOUR_ORANGE)
 
         # Everything is done! Write to the screen and update our state.

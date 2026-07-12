@@ -1,7 +1,9 @@
 import os
 import tkinter as tk
 from PIL import Image, ImageDraw, ImageTk, ImageFont
+
 from display.eink import EInk
+from utils.logs import GetLogger
 
 # Font paths (Reused from your EInk file)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -11,6 +13,8 @@ FONT_REGULAR_PATH = os.path.join(DATA_DIR, "fonts", "DejaVuSansMono.ttf")
 
 class DevDisplay(EInk):
     def __init__(self, mode="E-Ink"):
+        self.logger = GetLogger("DevDisplay")
+
         # Initialize a fake E-Ink window.
         self.mode = mode
         self._width = 800
@@ -79,9 +83,9 @@ class DevDisplay(EInk):
                 f"{aircraftType[:14]:^14}"
             ])
 
-    def WriteNoFlight(self, forecast_data):
+    def WriteNoFlight(self, state_information, forecast_data=None):
         if self.mode == "E-Ink":
-            super().WriteNoFlight(forecast_data)
+            super().WriteNoFlight(state_information, forecast_data)
         else:
             self._draw_splitflap_sim([
                 "NO FLIGHTS".center(14),
