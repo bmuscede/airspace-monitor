@@ -1,10 +1,12 @@
-# ✈️ Airspace Monitor
+# Airspace Monitor
 
-**Airspace Monitor** is an ADS-B overhead flight tracking system designed for Raspberry Pi (DietPi OS). It detects live aircraft traffic overhead using an ADS-B antenna and receiver, enriches flight data with origin/destination details via FlightAware's AeroAPI, and outputs real-time flight telemetry to physical displays (**E-Ink** and mechanical **Split-Flap**) as well as a modern web-based **Command Center Dashboard**.
+**Airspace Monitor** is an ADS-B overhead flight tracking system designed for Raspberry Pi (DietPi OS). 
+
+It detects live aircraft traffic overhead using an ADS-B antenna and receiver, enriches flight data with origin/destination details via FlightAware's AeroAPI, and outputs real-time flight telemetry to physical displays (**E-Ink** and mechanical **Split-Flap**) as well as a modern web-based **Command Center Dashboard** for viewing all flights and for setting configuration parameters.
 
 ---
 
-## 📌 Project Overview
+## Project Overview
 
 ```
                           ┌────────────────────────┐
@@ -24,18 +26,18 @@
 │   │ OpenSky ICAO CSV  │    │ FlightAware API    │   │ FastAPI Server  │   │
 │   │ (Local Hex Lookup)│    │ (TTL Cache Routes) │   │ (Port 8000)     │   │
 │   └───────────────────┘    └────────────────────┘   └────────┬────────┘   │
-└─────────────┬───────────────────────────┬────────────────────┼────────────┘
-              │ (SPI)                     │ (I2C)              │
-              ▼                           ▼                    ▼ (HTTP/REST)
-    ┌──────────────────┐        ┌───────────────────┐┌──────────────────┐
-    │  E-Ink Display   │        │ Split-Flap Display││  React Dashboard │
-    │ (Silent / Static)│        │ (Mechanical Flaps)││ (Airspace Radar) │
-    └──────────────────┘        └───────────────────┘└──────────────────┘
+└─────────────┬────────────────────────┬───────────────────────┼────────────┘
+              │ (SPI)                  │ (I2C)                 │
+              ▼                        ▼                       ▼ (HTTP/REST)
+    ┌──────────────────┐     ┌───────────────────┐    ┌──────────────────┐
+    │  E-Ink Display   │     │ Split-Flap Display│    │  React Dashboard │
+    │ (Silent / Static)│     │ (Mechanical Flaps)│    │ (Airspace Radar) │
+    └──────────────────┘     └───────────────────┘    └──────────────────┘
 ```
 
 ---
 
-## ✨ Key Features
+## Key Features
 
 - **Live ADS-B Aircraft Tracking:** Ingests raw 1090MHz ADS-B radio signals using `readsb` to decode aircraft hex codes, speed, altitude, heading, bearing, and distance in real time.
 - **Dual Display Support:**
@@ -84,6 +86,7 @@
 
 ## 🛠️ Hardware & OS Requirements
 
+This repository is designed to work with the following hardware: 
 - **Base Unit:** Raspberry Pi (3B+, 4, 5, or Zero 2 W recommended) running **DietPi OS**.
 - **Radio Receiver:** RTL-SDR USB dongle + 1090 MHz ADS-B antenna.
 - **Displays (Optional / Configurable):**
@@ -92,7 +95,7 @@
 
 ---
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Option 1: Automated SD Card Flashing (Recommended)
 
@@ -125,7 +128,7 @@ sudo os/setup.sh
 
 ---
 
-## 💻 Local Development & Testing
+## Local Development & Testing
 
 You can run the frontend dashboard and backend service locally in test mode while developing.
 
@@ -161,7 +164,7 @@ Open `http://localhost:5173` in your browser to view the Command Center.
 
 ---
 
-## 📖 Component Documentation
+## Component Documentation
 
 For detailed technical breakdowns of individual components, refer to the `docs/` directory:
 
@@ -170,6 +173,6 @@ For detailed technical breakdowns of individual components, refer to the `docs/`
 
 ---
 
-## 📄 License
+## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the MIT License - see the LICENSE file for details.

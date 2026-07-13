@@ -1,9 +1,10 @@
 from typing import Optional
-from utils.logs import GetLogger
-from display.base import DisplayDriver
-from models import Aircraft, StateInformation, WeatherForecast
 
-class SplitFlap(DisplayDriver):
+from display.base_display import Display
+from models import Aircraft, StateInformation, WeatherForecast
+from utils.logs import GetLogger
+
+class SplitFlapDisplay(Display):
     """
     Stub driver for the mechanical Split-Flap display.
     
@@ -19,7 +20,7 @@ class SplitFlap(DisplayDriver):
         self.logger.info("Split-Flap display driver initialized (STUB).")
         self._last_state = None
 
-    def WriteNoFlight(self, state_info: StateInformation, forecast_data: Optional[WeatherForecast] = None):
+    def write_no_flight(self, state_info: StateInformation, forecast_data: Optional[WeatherForecast] = None):
         """Displays a 'no flights overhead' message on the split-flap."""
         if self._last_state == "NO_FLIGHT":
             return
@@ -27,7 +28,7 @@ class SplitFlap(DisplayDriver):
         self.logger.info("STUB: Would display 'NO FLIGHTS OVERHEAD' on Split-Flap.")
         self._last_state = "NO_FLIGHT"
 
-    def WriteFlightData(self, aircraft: Aircraft):
+    def write_flight_data(self, aircraft: Aircraft):
         """Displays flight data on the split-flap."""
         flight_state = (aircraft.flight, aircraft.origin, aircraft.destination, aircraft.altitude, aircraft.heading, aircraft.speed, aircraft.type)
         if self._last_state == flight_state:

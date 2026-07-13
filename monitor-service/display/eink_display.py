@@ -10,10 +10,11 @@ import pathlib
 
 from PIL import Image, ImageDraw, ImageFont
 
+from display.base_display import Display
+from models import Aircraft, StateInformation, WeatherForecast
 from utils.logs import GetLogger
 from utils.utils import svg_to_png, get_svg_filename_from_code
-from display.base import DisplayDriver
-from models import Aircraft, StateInformation, WeatherForecast
+
 
 try:
     import epaper
@@ -35,7 +36,7 @@ COLOUR_BLUE = (0, 0, 255)
 COLOUR_RED = (255, 0, 0)
 COLOUR_ORANGE = (255, 128, 0)  
 
-class EInk(DisplayDriver):
+class EInkDisplay(Display):
     def __init__(self):
         self.logger = GetLogger("EInk")
         self.logger.debug("Starting EInk display driver initialization...")
@@ -551,7 +552,7 @@ class EInk(DisplayDriver):
             self._display.sleep()
             self.logger.info("EInk display updated with new image. Going to sleep.")
 
-    def WriteNoFlight(self, state_info: StateInformation, forecast_data: Optional[WeatherForecast] = None):
+    def write_no_flight(self, state_info: StateInformation, forecast_data: Optional[WeatherForecast] = None):
         # Check if we should update the screen before beginning.
         # TODO: This will refuse to update once set. We need a better way to check this for a change.
         flight_state = "NO_FLIGHT"
@@ -589,7 +590,7 @@ class EInk(DisplayDriver):
         self._last_state = flight_state
         self._last_update_time = time.time()
 
-    def WriteFlightData(self, aircraft: Aircraft):
+    def write_flight_data(self, aircraft: Aircraft):
         # Check if we should update the screen before beginning.
         flight_state = (aircraft.flight, aircraft.origin, aircraft.destination, aircraft.altitude, aircraft.heading, aircraft.speed, aircraft.type)
         if self._should_update_screen(flight_state) is False:

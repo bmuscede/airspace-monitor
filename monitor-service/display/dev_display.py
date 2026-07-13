@@ -3,7 +3,7 @@ import tkinter as tk
 from PIL import Image, ImageDraw, ImageTk, ImageFont
 from typing import Optional
 
-from display.eink import EInk
+from display.eink_display import EInkDisplay
 from utils.logs import GetLogger
 from models import Aircraft, StateInformation, WeatherForecast
 
@@ -13,7 +13,7 @@ DATA_DIR = os.path.join(BASE_DIR, "..", "..", "data")
 FONT_BOLD_PATH = os.path.join(DATA_DIR, "fonts", "DejaVuSansMono-Bold.ttf")
 FONT_REGULAR_PATH = os.path.join(DATA_DIR, "fonts", "DejaVuSansMono.ttf")
 
-class DevDisplay(EInk):
+class DevDisplay(EInkDisplay):
     def __init__(self, mode="E-Ink"):
         self.logger = GetLogger("DevDisplay")
 
@@ -52,48 +52,11 @@ class DevDisplay(EInk):
         # Load the splitflap font here.
         self._fontFlap = ImageFont.truetype(FONT_BOLD_PATH, 40)
 
-    def SetMode(self, mode):
+    def set_mode(self, mode):
         """Called to change thn the dae mode of the active display."""
         self.mode = mode
         self.root.title(f"Airspace Monitor - Dev Display ({self.mode})")
         self.root.update()
-
-    def _writeToScreen(self, canvas):
-        """
-        OVERRIDE: Intercepts the final canvas from the EInk parent class.
-        Instead of pushing to hardware, we render it to the desktop window.
-        """
-        # E-Ink images are 1-bit monochrome. Tkinter requires RGB.
-        img = canvas.convert("RGB")
-        self.tk_image = ImageTk.PhotoImage(img)
-        self.label.config(image=self.tk_image)
-        
-        # Non-blocking GUI update. This allows your controller.py while-loop 
-        # to keep spinning without freezing the desktop window!
-        self.root.update()
-
-    def WriteFlightData(self, aircraft: Aircraft):
-        if self.mode == "E-Ink":
-            # Pass the data up to the parent EInk class. It will build the ticket UI,
-            # and when it finishes, it will call OUR overridden _writeToScreen!
-            super().WriteFlightData(aircraft)
-        else:
-            # Simulate a 3-row Split-Flap mechanical display
-            self._draw_splitflap_sim([
-                f"{aircraft.flight:^14}",
-                f"{aircraft.origin}-{aircraft.destination:^14}",
-                f"{aircraft.type[:14]:^14}"
-            ])
-
-    def WriteNoFlight(self, state_info: StateInformation, forecast_data: Optional[WeatherForecast] = None):
-        if self.mode == "E-Ink":
-            super().WriteNoFlight(state_info, forecast_data)
-        else:
-            self._draw_splitflap_sim([
-                "NO FLIGHTS".center(14),
-                "".center(14),
-                "".center(14)
-            ])
 
     def _draw_splitflap_sim(self, lines):
         """Draws a visual representation of mechanical split-flap cards."""
@@ -118,3 +81,40 @@ class DevDisplay(EInk):
             start_y += 80
             
         self._writeToScreen(canvas)
+
+    def _writeToScreen(self, canvas):
+        """
+        OVERRIDE: Intercepts the final canvas from the EInk parent class.
+        Instead of pushing to hardware, we render it to the desktop window.
+        """
+        # E-Ink images are 1-bit monochrome. Tkinter requires RGB.
+        img = canvas.convert("RGB")
+        self.tk_image = ImageTk.PhotoImage(img)
+        self.label.config(image=self.tk_image)
+        
+        # Non-blocking GUI update. This allows your controller.py while-loop 
+        # to keep spinning without freezing the desktop window!
+        self.root.update()
+
+    def write_no_flight(self, state_info: StateInformation, forecast_data: Optional[WeatherForecast] = None):
+        if self.mode == "E-Ink":
+            super().write_no_flight(state_info, forecast_data)
+        else:
+            self._draw_splitflap_sim([
+                "NO FLIGHTS".center(14),
+                "".center(14),
+                "".center(14)
+            ])
+
+    def write_flight_data(self, aircraft: Aircraft):
+        if self.mode == "E-Ink":
+            # Pass the data up to the parent EInk class. It will build the ticket UI,
+            # and when it finishes, it will call OUR overridden _writeToScreen!
+            super().write_flight_data(aircraft)
+        else:
+            # Simulate a 3-row Split-Flap mechanical display
+            self._draw_splitflap_sim([
+                f"{aircraft.flight:^14}",
+                f"{aircraft.origin}-{aircraft.destination:^14}",
+                f"{aircraft.type[:14]:^14}"
+            ])

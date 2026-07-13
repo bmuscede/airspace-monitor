@@ -10,7 +10,7 @@ from controller.state import SystemState
 from data.aircraft_database import AircraftDatabase
 from data.flightaware import FlightAwareClient
 from data.openweathermap import OpenweathermapClient
-from display.dev import DevDisplay
+from display.dev_display import DevDisplay
 from utils.config import ConfigManager
 from utils.logs import GetLogger
 from utils.utils import haversine, bearing
@@ -56,11 +56,11 @@ class Controller:
             self.eink = self._devDisplay
             self.splitflap = self._devDisplay
         else:
-            from display.eink import EInk
-            from display.splitflap import SplitFlap
+            from display.eink_display import EInkDisplay
+            from display.splitflap import SplitFlapDisplay
             self._devDisplay = None
-            self.eink = EInk()
-            self.splitflap = SplitFlap()
+            self.eink = EInkDisplay()
+            self.splitflap = SplitFlapDisplay()
 
     def Start(self) -> None:
         """
