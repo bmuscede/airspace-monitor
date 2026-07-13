@@ -1,6 +1,7 @@
 import os
 import csv
 import requests
+from typing import Dict
 
 from utils.logs import GetLogger
 
@@ -19,7 +20,7 @@ class AircraftDatabase:
         if os.path.exists(self.dbPath):
             self.LoadIntoMemory()
 
-    def DownloadDatabase(self):
+    def DownloadDatabase(self) -> bool:
         if self.isUpdating:
             # Already updating so just abort.
             return False
@@ -45,7 +46,7 @@ class AircraftDatabase:
         finally:
             self.isUpdating = False
 
-    def LoadIntoMemory(self):
+    def LoadIntoMemory(self) -> None:
         self.logger.info("Loading aircraft database into RAM...")
 
         try:
@@ -68,7 +69,7 @@ class AircraftDatabase:
         except Exception as e:
             self.logger.error(f"Failed to load aircraft CSV: {e}")
 
-    def GetAircraftInfo(self, hexCode: str):
+    def GetAircraftInfo(self, hexCode: str) -> Dict[str, str]:
         # Ensure the hexcode is all lowercase first.
         cleanHexCode = hexCode.strip().lower()
         return self.dbCache.get(cleanHexCode, {"type": "???", "reg": "???"})

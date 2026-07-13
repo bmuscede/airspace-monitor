@@ -1,5 +1,6 @@
 import math
 import cairosvg
+from typing import Optional
 
 def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """
@@ -43,7 +44,7 @@ def bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
     return round(compass_bearing, 1)
 
-def get_svg_filename_from_code(weather_code):
+def get_svg_filename_from_code(weather_code: str) -> str:
      owm_code_to_svg_map = {
           # Clear Sky
           "01d": "clear-day.svg",
@@ -87,10 +88,7 @@ def get_svg_filename_from_code(weather_code):
      
      return "not-available.svg"
 
-def svg_to_png(svg_path, png_path, output_width=None, output_height=None, dpi=96):
-    try:
-          # Use the cairosvg library to convert to PNG
-          cairosvg.svg2png(url=str(svg_path), write_to=str(png_path), output_width=output_width, output_height=output_height, dpi=dpi)
-          return True
-    except Exception:
-          return False
+def svg_to_png(svg_path: str, png_path: str, output_width: Optional[int] = None, output_height: Optional[int] = None, dpi: int = 96) -> bool:
+    # Use the cairosvg library to convert to PNG
+    cairosvg.svg2png(url=str(svg_path), write_to=str(png_path), output_width=output_width, output_height=output_height, dpi=dpi)
+    return True

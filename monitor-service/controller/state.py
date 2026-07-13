@@ -1,6 +1,8 @@
 import threading
 import time
 from datetime import datetime
+from typing import List, Optional
+from models import Aircraft, SystemStateSnapshot
 
 class SystemState:
     """
@@ -53,17 +55,17 @@ class SystemState:
     def current_aircraft(self):
         with self._lock:
             # Return a copy to prevent mutations outside the lock.
-            return dict(self._current_aircraft) if self._current_aircraft else None
+            return self._current_aircraft.model_copy() if self._current_aircraft else None
 
     @property
     def closest_aircraft(self):
         with self._lock:
-            return dict(self._closest_aircraft) if self._closest_aircraft else None
+            return self._closest_aircraft.model_copy() if self._closest_aircraft else None
 
     @property
     def all_aircraft(self):
         with self._lock:
-            return list(self._all_aircraft)
+            return [ac.model_copy() for ac in self._all_aircraft]
 
     @property
     def last_update(self):
@@ -101,14 +103,14 @@ class SystemState:
             self._display_mode = value
 
     @current_aircraft.setter
-    def current_aircraft(self, value):
+    def current_aircraft(self, value: Optional[Aircraft]):
         with self._lock:
-            self._current_aircraft = dict(value) if value else None
+            self._current_aircraft = value.model_copy() if value else None
 
     @closest_aircraft.setter
-    def closest_aircraft(self, value):
+    def closest_aircraft(self, value: Optional[Aircraft]):
         with self._lock:
-            self._closest_aircraft = dict(value) if value else None
+            self._closest_aircraft = value.model_copy() if value else None
 
     @readsb_connected.setter
     def readsb_connected(self, value: bool):
@@ -117,14 +119,14 @@ class SystemState:
 
     # --- Bulk Update (called by the hardware loop each cycle) ---
 
-    def update_aircraft(self, all_aircraft: list, closest: dict = None):
+    def update_aircraft(self, all_aircraft: List[Aircraft], closest: Optional[Aircraft] = None):
         """
         Atomically updates the aircraft list, closest aircraft, and timestamp.
         Called once per hardware loop cycle.
         """
         with self._lock:
-            self._all_aircraft = list(all_aircraft)
-            self._closest_aircraft = dict(closest) if closest else None
+            self._all_aircraft = [ac.model_copy() for ac in all_aircraft]
+            self._closest_aircraft = closest.model_copy() if closest else None
             self._last_update = time.time()
 
             # Check if we need to purge the daily list.
@@ -133,7 +135,7 @@ class SystemState:
                 self._daily_unique_aircraft = set()
                 self._count_day = datetime.now()
             for aircraft in all_aircraft:
-                self._daily_unique_aircraft.add(aircraft.get("flight", "???"))
+                self._daily_unique_aircraft.add(aircraft.hex)
             
     # --- Toggle ---
 
@@ -151,12 +153,13 @@ class SystemState:
     def snapshot(self) -> dict:
         """Returns a complete, thread-safe copy of the current system state."""
         with self._lock:
-            return {
-                "systemRunning": self._system_running,
-                "displayMode": self._display_mode,
-                "currentAircraft": dict(self._current_aircraft) if self._current_aircraft else None,
-                "closestAircraft": dict(self._closest_aircraft) if self._closest_aircraft else None,
-                "aircraftCount": len(self._all_aircraft),
-                "lastUpdate": self._last_update,
-                "readsbConnected": self._readsb_connected,
-            }
+            snapshot_model = SystemStateSnapshot(
+                systemRunning=self._system_running,
+                displayMode=self._display_mode,
+                currentAircraft=self._current_aircraft.model_copy() if self._current_aircraft else None,
+                closestAircraft=self._closest_aircraft.model_copy() if self._closest_aircraft else None,
+                aircraftCount=len(self._all_aircraft),
+                lastUpdate=self._last_update,
+                readsbConnected=self._readsb_connected,
+            )
+            return snapshot_model.model_dump()

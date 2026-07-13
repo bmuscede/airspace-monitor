@@ -1,6 +1,7 @@
 import sys
 import os
 import time
+f
 import math
 import csv
 import random
@@ -11,6 +12,8 @@ from PIL import Image, ImageDraw, ImageFont
 
 from utils.logs import GetLogger
 from utils.utils import svg_to_png, get_svg_filename_from_code
+from display.base import DisplayDriver
+from models import Aircraft, StateInformation, WeatherForecast
 
 try:
     import epaper
@@ -32,7 +35,7 @@ COLOUR_BLUE = (0, 0, 255)
 COLOUR_RED = (255, 0, 0)
 COLOUR_ORANGE = (255, 128, 0)  
 
-class EInk:
+class EInk(DisplayDriver):
     def __init__(self):
         self.logger = GetLogger("EInk")
         self.logger.debug("Starting EInk display driver initialization...")
@@ -162,13 +165,13 @@ class EInk:
         """
         return self._get_ticket_stub_x_position() - 10
  
-    def _should_update_screen(self, last_state=None):
+    def _should_update_screen(self, new_state=None):
         """
         Checks if the screen should be updated. This ensures we don't overload the screen.
         Returns true if the state changes or if we hit a timeout.
         """
         current_time = time.time()
-        if self._last_state == "NO_FLIGHT":
+        if self._last_state != new_state:
             return False
         if current_time - self._last_update_time < self._throttle_seconds:
             return False
@@ -263,39 +266,39 @@ class EInk:
 
     def _draw_idle_weather_section(self, draw, canvas, forecast_data, high_colour, low_colour):
         draw.text((30, 105), "4-DAY WEATHER FORECAST", font=self._fontIdleHeader, fill=(0,0,0))
-        draw.text((30, 130), f"FOR {forecast_data['location_name'].upper()}", font=self._fontIdleRowBold, fill=(0,0,0))
+        draw.text((30, 130), f"FOR {forecast_data.location_name.upper()}", font=self._fontIdleRowBold, fill=(0,0,0))
     
         start_y = 175
         row_height = 70
         
         # Iterate through the forecast and add each one-by-one.
-        for i, data in enumerate(forecast_data['forecast']):
+        for i, data in enumerate(forecast_data.forecast):
             y = start_y + (i * row_height)
             
             # Day Label (Vertically centered at y + 20)
-            draw.text((30, y + 20), data['day'], font=self._fontIdleRowBold, fill=(0,0,0))
+            draw.text((30, y + 20), data.day, font=self._fontIdleRowBold, fill=(0,0,0))
             
             # Icon Handling (60x60 icon positioned at y + 5)
             icon_x = 150
             icon_y = y + 5
 
-            svg_path = pathlib.Path(os.path.join(WEATHER_PATH, get_svg_filename_from_code(data['icon'])))
+            svg_path = pathlib.Path(os.path.join(WEATHER_PATH, get_svg_filename_from_code(data.icon)))
             temp_png_path = svg_path.with_suffix(".temp.png")
             
-            if svg_to_png(svg_path, temp_png_path, output_width=60, output_height=60, dpi=96):
-                try:
-                    forecast_icon = Image.open(temp_png_path).convert("RGBA")
-                    canvas.paste(forecast_icon, (icon_x, icon_y), mask=forecast_icon)
-                except Exception as e:
-                    self.logger.error(f"Failure adding weather icon to image: {e}")
-                finally:
-                    if temp_png_path.exists():
-                        temp_png_path.unlink()
+            try:
+                svg_to_png(svg_path, temp_png_path, output_width=60, output_height=60, dpi=96)
+                forecast_icon = Image.open(temp_png_path).convert("RGBA")
+                canvas.paste(forecast_icon, (icon_x, icon_y), mask=forecast_icon)
+            except Exception as e:
+                self.logger.error(f"Failure adding weather icon to image: {e}")
+            finally:
+                if temp_png_path.exists():
+                    temp_png_path.unlink()
                 
             # Temperatures & Desc vertically aligned to match the icon center
-            draw.text((225, y + 12), data['high'], font=self._fontIdleRowBold, fill=high_colour)
-            draw.text((285, y + 12), f"/ {data['low']}", font=self._fontIdleRowBold, fill=low_colour)
-            draw.text((225, y + 38), data['description'], font=self._fontIdleRowSmall, fill=(0,0,0))
+            draw.text((225, y + 12), data.high, font=self._fontIdleRowBold, fill=high_colour)
+            draw.text((285, y + 12), f"/ {data.low}", font=self._fontIdleRowBold, fill=low_colour)
+            draw.text((225, y + 38), data.description, font=self._fontIdleRowSmall, fill=(0,0,0))
             
             # Dividing line moved to bottom of row (y + 68) so icons don't clip through
             if i < 3:
@@ -333,32 +336,32 @@ class EInk:
         right_edge_x = 760
         
         # Status
-        status_text = "ACTIVE" if state_information.get('readsb_connected', False) else "NOT RUNNING"
+        status_text = "ACTIVE" if state_information.readsb_connected else "NOT RUNNING"
         status_colour = COLOUR_GREEN if status_text == "ACTIVE" else COLOUR_RED
         draw.text((485, stats_y), "Status:", font=self._fontIdleRowRegular, fill=(0,0,0))
         x_rj = self._get_right_justified_x(draw, status_text, self._fontIdleRowBold, right_edge_x)
         draw.text((x_rj, stats_y), status_text, font=self._fontIdleRowBold, fill=status_colour)
         
         # Radar Range
-        status_text = f"{state_information.get('range', 50)}NM"
+        status_text = f"{state_information.range}NM"
         draw.text((485, stats_y + spacing), "Radar Range:", font=self._fontIdleRowRegular, fill=(0,0,0))
         x_rj = self._get_right_justified_x(draw, status_text, self._fontIdleRowBold, right_edge_x)
         draw.text((x_rj, stats_y + spacing), status_text, font=self._fontIdleRowBold, fill=COLOUR_ORANGE)
         
         # Up-Time
-        uptime_text = state_information.get('uptime', "Unknown")
+        uptime_text = state_information.uptime
         draw.text((485, stats_y + (spacing * 2)), "Up-Time:", font=self._fontIdleRowRegular, fill=(0,0,0))
         x_rj = self._get_right_justified_x(draw, uptime_text, self._fontIdleRowRegular, right_edge_x)
         draw.text((x_rj, stats_y + (spacing * 2)), uptime_text, font=self._fontIdleRowRegular, fill=(0,0,0))
         
         # Total Flights Today
-        flights_today = state_information.get('daily_seen', 0)
+        flights_today = state_information.daily_seen
         draw.text((485, stats_y + (spacing * 3)), "Today's Flights:", font=self._fontIdleRowRegular, fill=(0,0,0))
         x_rj = self._get_right_justified_x(draw, f"{flights_today}", self._fontIdleRowBold, right_edge_x)
         draw.text((x_rj, stats_y + (spacing * 3)), f"{flights_today}", font=self._fontIdleRowBold, fill=COLOUR_BLUE)
         
         # Total Flights All Time
-        flights_total = state_information.get('total_seen', 0)
+        flights_total = state_information.total_seen
         draw.text((485, stats_y + (spacing * 4)), "Total Flights:", font=self._fontIdleRowRegular, fill=(0,0,0))
         x_rj = self._get_right_justified_x(draw, f"{flights_total}", self._fontIdleRowBold, right_edge_x)
         draw.text((x_rj, stats_y + (spacing * 4)), f"{flights_total}", font=self._fontIdleRowBold, fill=COLOUR_BLUE)
@@ -500,7 +503,7 @@ class EInk:
         stub_x = self._get_ticket_stub_x_position()
 
         # Start by drawing the logo if it exists.
-        logo_path = os.path.join(DATA_DIR, "logos", LOGO_PATH, f"{logo_filename}")
+        logo_path = os.path.join(LOGO_PATH, f"{logo_filename}")
         try:
             logo = Image.open(logo_path).convert("RGBA")
             logo = logo.resize((80, 80))
@@ -548,7 +551,7 @@ class EInk:
             self._display.sleep()
             self.logger.info("EInk display updated with new image. Going to sleep.")
 
-    def WriteNoFlight(self, state_information, forecast_data=None):
+    def WriteNoFlight(self, state_info: StateInformation, forecast_data: Optional[WeatherForecast] = None):
         # Check if we should update the screen before beginning.
         # TODO: This will refuse to update once set. We need a better way to check this for a change.
         flight_state = "NO_FLIGHT"
@@ -557,11 +560,11 @@ class EInk:
 
         # Check if the forecast data is set.
         if forecast_data is None:
-            forecast_data = {
-                "city_name": "Unknown",
-                "location_name": "Unknown, UNK",
-                "forecast": []
-            }
+            forecast_data = WeatherForecast(
+                city_name="Unknown",
+                location_name="Unknown, UNK",
+                forecast=[]
+            )
         
         # Next, if the forecast data is 
         # Creates a new canvas and drawing.
@@ -574,11 +577,11 @@ class EInk:
         COLOUR_ORANGE = (255, 128, 0)
 
         # Build the initial idle frame.
-        self._draw_idle_frame(draw, COLOUR_BLUE, forecast_data['city_name'] )
+        self._draw_idle_frame(draw, COLOUR_BLUE, forecast_data.city_name )
 
         # Next, draw the three main sections.
         self._draw_idle_weather_section(draw, canvas, forecast_data, COLOUR_ORANGE, COLOUR_BLUE)
-        self._draw_idle_statistics_section(draw, state_information)
+        self._draw_idle_statistics_section(draw, state_info)
         self._draw_idle_tooltext_section(draw, COLOUR_ORANGE)
 
         # Everything is done! Write to the screen and update our state.
@@ -586,9 +589,9 @@ class EInk:
         self._last_state = flight_state
         self._last_update_time = time.time()
 
-    def WriteFlightData(self, flight_num, origin, dest, elev, heading, gs, aircraft_type):
+    def WriteFlightData(self, aircraft: Aircraft):
         # Check if we should update the screen before beginning.
-        flight_state = (flight_num, origin, dest, elev, heading, gs, aircraft_type)
+        flight_state = (aircraft.flight, aircraft.origin, aircraft.destination, aircraft.altitude, aircraft.heading, aircraft.speed, aircraft.type)
         if self._should_update_screen(flight_state) is False:
             return
 
@@ -598,7 +601,7 @@ class EInk:
 
         # Determine the colour palette for this ticket.
         # Use this by getting the first three digits of the flight number and looking in the colour cache.
-        airline_icao_code = flight_num[:3]
+        airline_icao_code = aircraft.flight[:3]
         if airline_icao_code not in self._colour_cache:
             airline_icao_code = GENERIC_AIRLINE_CODE
         
@@ -612,11 +615,11 @@ class EInk:
 
         # Next draw the main part of the ticket frame
         # and other data columns.
-        self._draw_ticket_main_section(draw, primary_colour, accent_colour, flight_num, airline_name, origin, dest)
-        self._draw_ticket_bottom_section(draw, primary_colour, elev, heading, gs)
+        self._draw_ticket_main_section(draw, primary_colour, accent_colour, aircraft.flight, airline_name, aircraft.origin, aircraft.destination)
+        self._draw_ticket_bottom_section(draw, primary_colour, aircraft.altitude, aircraft.heading, aircraft.speed)
 
         # Draw the ticket stub data.
-        self._draw_ticket_stub_section(draw, canvas, flight_num, aircraft_type, logo_filename)
+        self._draw_ticket_stub_section(draw, canvas, aircraft.flight, aircraft.type, logo_filename)
 
         # Everything is done! Write to the screen and update our state.
         self._writeToScreen(canvas)

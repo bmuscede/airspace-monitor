@@ -2,11 +2,13 @@ import time
 from datetime import datetime
 import requests
 from collections import defaultdict
+from typing import Optional
 
 from utils.logs import GetLogger
+from models import WeatherDay, WeatherForecast
 
 class OpenweathermapClient:
-    def __init__(self, api_key="", api_url="", weather_ttl=3600):
+    def __init__(self, api_key: str = "", api_url: str = "", weather_ttl: int = 3600):
         self.logger = GetLogger("Openweathermap")
 
         self.api_key = api_key
@@ -24,7 +26,7 @@ class OpenweathermapClient:
         if not self.api_url:
             self.logger.warning("No API URL provided, all weather lookups will be empty...")
 
-    def _is_cache_invalid(self, lat, lon):
+    def _is_cache_invalid(self, lat: float, lon: float) -> bool:
         """
         Evaluates whether the cache is invalid.
         There are four categories for this:
@@ -55,7 +57,7 @@ class OpenweathermapClient:
         # Cache is still perfectly valid
         return False
 
-    def _fetch_and_parse_weather(self, lat, lon, units="metric"):
+    def _fetch_and_parse_weather(self, lat: float, lon: float, units: str = "metric") -> Optional[WeatherForecast]:
         # Build request parameters and send the request to Openweather map.
         params = {
             "lat": lat,
@@ -123,21 +125,21 @@ class OpenweathermapClient:
                 day_name = date_obj.strftime("%A").upper()
 
             # Build the forecast object and continue.
-            forecast_array.append({
-                "day": day_name,
-                "high": f"{round(daily_high)}{unit_str}",
-                "low": f"{round(daily_low)}{unit_str}",
-                "description": weather_desc,
-                "icon": icon_code
-            })
+            forecast_array.append(WeatherDay(
+                day=day_name,
+                high=f"{round(daily_high)}{unit_str}",
+                low=f"{round(daily_low)}{unit_str}",
+                description=weather_desc,
+                icon=icon_code
+            ))
         
-        return {
-            "city_name": city_name,
-            "location_name": location_name,
-            "forecast": forecast_array
-        }
+        return WeatherForecast(
+            city_name=city_name,
+            location_name=location_name,
+            forecast=forecast_array
+        )
 
-    def get_forecast(self, lat, lon):
+    def get_forecast(self, lat: float, lon: float) -> Optional[WeatherForecast]:
         # Check if we can fetch the forecast from Openweathermap.
         if not self.api_key or not self.api_url:
             return None

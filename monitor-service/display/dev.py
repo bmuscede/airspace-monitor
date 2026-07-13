@@ -1,9 +1,11 @@
 import os
 import tkinter as tk
 from PIL import Image, ImageDraw, ImageTk, ImageFont
+from typing import Optional
 
 from display.eink import EInk
 from utils.logs import GetLogger
+from models import Aircraft, StateInformation, WeatherForecast
 
 # Font paths (Reused from your EInk file)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -70,22 +72,22 @@ class DevDisplay(EInk):
         # to keep spinning without freezing the desktop window!
         self.root.update()
 
-    def WriteFlightData(self, flightNum, origin, dest, elev, heading, gs, aircraftType):
+    def WriteFlightData(self, aircraft: Aircraft):
         if self.mode == "E-Ink":
             # Pass the data up to the parent EInk class. It will build the ticket UI,
             # and when it finishes, it will call OUR overridden _writeToScreen!
-            super().WriteFlightData(flightNum, origin, dest, elev, heading, gs, aircraftType)
+            super().WriteFlightData(aircraft)
         else:
             # Simulate a 3-row Split-Flap mechanical display
             self._draw_splitflap_sim([
-                f"{flightNum:^14}",
-                f"{origin}-{dest:^14}",
-                f"{aircraftType[:14]:^14}"
+                f"{aircraft.flight:^14}",
+                f"{aircraft.origin}-{aircraft.destination:^14}",
+                f"{aircraft.type[:14]:^14}"
             ])
 
-    def WriteNoFlight(self, state_information, forecast_data=None):
+    def WriteNoFlight(self, state_info: StateInformation, forecast_data: Optional[WeatherForecast] = None):
         if self.mode == "E-Ink":
-            super().WriteNoFlight(state_information, forecast_data)
+            super().WriteNoFlight(state_info, forecast_data)
         else:
             self._draw_splitflap_sim([
                 "NO FLIGHTS".center(14),

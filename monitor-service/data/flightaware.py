@@ -1,6 +1,7 @@
 import requests
 import time
 import math
+from typing import Tuple, List, Dict, Any
 
 from utils.logs import GetLogger
 
@@ -16,7 +17,7 @@ class FlightAwareClient:
         if not self.apiKey:
             self.logger.warning("No API key provided, all lookups will be empty...")
 
-    def GetRoute(self, flightNum: str):
+    def GetRoute(self, flightNum: str) -> Tuple[str, str]:
         """
         Attempts to resolve origin and destination for a given flight number.
         First checks the TTL cache, then falls back to the FlightAware API.
@@ -48,8 +49,9 @@ class FlightAwareClient:
                 # Get the origin -> destination.
                 # Aeroapi fills in fields even if they don't exist which means that we have to handle both null and non-existent entries.
                 origin_data = flight.get('origin', {})
+                destination_data = flight.get('destination', {})
+
                 origin = '???' if origin_data is None else origin_data.get('code_iata', '???')
-                destination_data = flight.get('destination', {}).get('code_iata', '???')
                 destination = '???' if destination_data is None else destination_data.get('code_iata', '???')
 
                 currentTime = time.time()
@@ -69,7 +71,7 @@ class FlightAwareClient:
             self.logger.error(f"Received error from FlightAware: {e}")
             return "???", "???"
 
-    def GetNearbyFlights(self, lat: float, lon: float, radius_nm: float):
+    def GetNearbyFlights(self, lat: float, lon: float, radius_nm: float) -> List[Dict[str, Any]]:
         """
         Simulates an antenna by querying FlightAware for flights 
         within a bounding box around the home coordinates.
@@ -104,10 +106,10 @@ class FlightAwareClient:
             data = response.json()
             return data.get("flights", [])
         except Exception as e:
-            print(f"Radar sweep failed: {e}")
+            self.logger.error(f"Radar sweep failed: {e}")
             return []
 
-    def GetRouteFromCache(self, flightNum: str):
+    def GetRouteFromCache(self, flightNum: str) -> Tuple[str, str]:
         """
         Checks the in-memory TTL cache for a previously looked up flight.
         Returns (origin, dest) on hit, or ("", "") on miss/expired.
