@@ -48,7 +48,7 @@ rpiPosY               = 15;    // Distance from left wall
 // ======================================================================
 // 2. YAPP CONFIGURATION
 // ======================================================================
-include <./YAPPgenerator_v3.scad>
+include <./dependencies/yapp-generator-v3.scad>
 
 // -- Print Selection --
 printBaseShell        = true;
@@ -152,7 +152,7 @@ module hookBaseInside()
 {
   // Imports RTL-SDR stand and slides it into open space to the right of the Pi
   translate([145, 15, 0]) 
-  import("rtl-sdr-stand.stl");
+  import("dependencies/rtl-sdr-stand.stl");
 }
 
 // ======================================================================
