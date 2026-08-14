@@ -10,16 +10,54 @@
   }
 }
 
+@keyframes radar-sweep {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 @layer utilities {
+
+  /*
+   * The scope's viewBox origin is not 0 0, so `transform-origin: center` does
+   * not resolve to the scope centre. `transform-box: view-box` makes the
+   * origin relative to the viewBox's top-left corner instead, where the centre
+   * is (SCOPE_EXTENT, SCOPE_EXTENT).
+   */
+  .radar-sweep {
+    transform-box: view-box;
+    transform-origin: 110px 110px;
+    animation: radar-sweep 4s linear infinite;
+  }
+
   .custom-scrollbar::-webkit-scrollbar {
     width: 6px;
   }
-  
+
   .custom-scrollbar::-webkit-scrollbar-track {
     @apply bg-transparent;
   }
-  
+
   .custom-scrollbar::-webkit-scrollbar-thumb {
     @apply bg-slate-700/50 rounded-full hover:bg-slate-600 transition-colors;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .radar-sweep {
+    animation: none;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
