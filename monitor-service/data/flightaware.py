@@ -81,8 +81,8 @@ class FlightAwareClient:
 
         if not self.apiURL:
             self.logger.error("No FlightAware API URL configured.")
-            return "???", "???"
-    
+            return []
+
         # Convert radius from nautical miles to degrees for the bounding box.
         lat_offset = radius_nm / 60.0
         lon_offset = radius_nm / (60.0 * math.cos(math.radians(lat)))
@@ -122,10 +122,14 @@ class FlightAwareClient:
                 origin = self.flightCache[flightNum]['origin']
                 dest = self.flightCache[flightNum]['dest']
 
-                self.logger.info(f"Cache hit for {flightNum}: {origin} -> {dest}.")
+                # DEBUG, not INFO: this used to fire on every hardware cycle
+                # for the displayed aircraft and was a meaningful share of the
+                # log write stream. Enrichment now happens once per contact, so
+                # this line is both rarer and less interesting.
+                self.logger.debug(f"Cache hit for {flightNum}: {origin} -> {dest}.")
                 return origin, dest
             else:
                 del self.flightCache[flightNum]
-                self.logger.info(f"Flight {flightNum} existed in cache but is too old. Checking FlightAware...")
+                self.logger.debug(f"Flight {flightNum} existed in cache but is too old. Checking FlightAware...")
         
         return "", ""

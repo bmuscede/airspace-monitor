@@ -6,6 +6,7 @@ import subprocess
 from utils.logs import GetLogger
 
 CONFIG_FILE_NAME = "config.json"
+
 class ConfigManager:
     def __init__(self, configPath=""):
         configPath = os.path.join(configPath, CONFIG_FILE_NAME)
@@ -18,15 +19,69 @@ class ConfigManager:
         # Default configuration template.
         # Add new configuration parameters here.
         self.defaultConfig = {
-            "flightaware_url": "https://aeroapi.flightaware.com/aeroapi",
-            "flightaware_api_key": "",
-            "cache_ttl": 3600,
-            "openweathermap_url": "https://api.openweathermap.org/data/2.5/forecast",
-            "openweathermap_api_key": "",
-            "weather_ttl": 3600,
-            "home_lat": 0.0,
-            "home_lon": 0.0,
-            "max_radar_range_nm": 50
+            # API for Flightaware
+            "flightaware": {
+                "url": "https://aeroapi.flightaware.com/aeroapi",
+                "api_key": "",
+                "cache_ttl": 3600
+            },
+
+            # API for Openweathermap
+            "openweathermap": {
+                "url": "https://api.openweathermap.org/data/2.5/forecast",
+                "api_key": "",
+                "cache_ttl": 3600,
+            },
+
+            # Radar location settings.
+            "radar": {
+                "home_lat": 0.0,
+                "home_lon": 0.0,
+                "max_range_nm": 50,
+            },
+
+            # Splitflap display settings.
+            "splitflap": {
+                "enabled": False,
+                "channels": [
+                    # Channels have the format of:
+                    # {
+                    #   "channel": 0,
+                    #   "charset": "<CHARSET_NAME>"
+                    # }    
+                ],
+                "charsets": {
+                    "default": {
+                        "flaps": " ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890!?."
+                    },
+                    "alternate": {
+                        "flaps": " ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890#?."
+                    },
+                    # Additional charsets can be defined below either as a string or array.
+                },
+                "auto_rehome": {
+                    "enabled": True,
+                    "max_attempts": 3,
+                    "window_seconds": 600,
+                    "backoff_seconds": 15
+                }
+            },
+
+            # Contact history settings.
+            "history": {
+                # How long a plane can go unheard before it is considered out of range.
+                "contact_gap_seconds": 300,
+                
+                # How long we flush for still-open tracked planes.
+                "flush_seconds": 300,
+
+                # How long we store planes tracked.
+                "retention_days": 90,
+            },
+
+            # The log level written to the live log. Persistent SD card log only stores WARNING
+            # and above.
+            "log_level": "INFO",
         }
         
         # Hold the active configuration in memory so callers
@@ -43,6 +98,8 @@ class ConfigManager:
     def Get(self, key: str, default=None):
         """
         Returns a single configuration value by key.
+        Dots return nested configuration options. So "test.sub" returns the
+        sub object of sub from test.
         Falls back to the provided default, then to the hardcoded
         default config, then to None.
         """
@@ -55,6 +112,7 @@ class ConfigManager:
     def Set(self, key: str, value):
         """
         Updates a single configuration value in memory.
+        Objects separated with a dot are nested underneath.
         Call SaveConfig() afterwards to persist to disk.
         """
         self._config[key] = value
@@ -184,9 +242,11 @@ network={{
         try:
             with open(self.configPath, 'r') as f:
                 loaded = json.load(f)
+
                 # Merge with defaults so any new keys are always present.
                 merged = dict(self.defaultConfig)
                 merged.update(loaded)
+
                 return merged
         except Exception as e:
             self.logger.error(f"Error loading config: {e}")

@@ -1,7 +1,6 @@
 import sys
 import os
 import time
-f
 import math
 import csv
 import random

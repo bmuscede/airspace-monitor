@@ -1,9 +1,12 @@
 import subprocess
-from fastapi import FastAPI, BackgroundTasks
+from contextlib import asynccontextmanager
+from typing import Optional
+from fastapi import FastAPI, BackgroundTasks, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
-from utils.logs import GetLogger
+from utils.logs import GetLogger, GetLiveLogPath, SetLogLevel
 
 # Module-level reference to the Controller.
 # Set by controller.py at startup before uvicorn.run().
@@ -11,7 +14,23 @@ controller = None
 
 logger = GetLogger("API")
 
-app = FastAPI(title="Airspace Monitor Service API")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """
+    Secondary shutdown hook.
+
+    SIGTERM/SIGINT are the primary route; this catches the case where uvicorn
+    is torn down without a signal reaching our handler. Shutdown() is
+    idempotent, so overlapping routes are harmless. It blocks waiting for the
+    hardware thread to flush, so run it off the event loop.
+    """
+    yield
+    if controller is not None:
+        await run_in_threadpool(controller.Shutdown)
+
+
+app = FastAPI(title="Airspace Monitor Service API", lifespan=lifespan)
 
 # Allow the React dashboard (Vite dev server) to make requests.
 app.add_middleware(
@@ -30,6 +49,12 @@ class ConfigUpdate(BaseModel):
     home_lat: float = None
     home_lon: float = None
     max_radar_range_nm: int = None
+    # Not surfaced by the Settings UI yet, and it does not need to be —
+    # only non-null fields are applied, so omitting them is safe.
+    contact_gap_seconds: int = None
+    history_flush_seconds: int = None
+    history_retention_days: int = None
+    log_level: str = None
 
 class WifiAddRequest(BaseModel):
     ssid: str
@@ -72,9 +97,46 @@ def save_config(update: ConfigUpdate):
     for key, value in changes.items():
         controller.configManager.Set(key, value)
 
+    # A few keys are held by live objects rather than read per use, so apply
+    # them now instead of waiting for a restart.
+    if "log_level" in changes:
+        SetLogLevel(changes["log_level"])
+    if "contact_gap_seconds" in changes:
+        controller.tracker.contact_gap_seconds = changes["contact_gap_seconds"]
+    if "history_flush_seconds" in changes:
+        controller.history.flush_seconds = changes["history_flush_seconds"]
+    if "history_retention_days" in changes:
+        controller.history.retention_days = changes["history_retention_days"]
+
     # Persist the updated config to disk.
     success = controller.configManager.SaveConfig()
     return {"status": "saved" if success else "error"}
+
+
+@app.get("/api/history/contacts")
+def get_history_contacts(
+    before: Optional[float] = Query(None, description="Return contacts with last_seen before this timestamp."),
+    before_id: Optional[int] = Query(None, description="Tie-breaker rowid for identical last_seen values."),
+    limit: int = Query(50, ge=1, le=500),
+):
+    """
+    Recent completed contacts, most recent first.
+
+    Keyset-paginated rather than OFFSET-paginated: rows are inserted underneath
+    the cursor as aircraft come and go, and offset pagination silently skips
+    and repeats rows under exactly those conditions. Page forward by passing
+    the `next_before` / `next_before_id` values from the previous response.
+    """
+    return controller.GetHistoryContacts(before=before, before_id=before_id, limit=limit)
+
+@app.get("/api/history/stats")
+def get_history_stats(range: str = Query("today", pattern="^(today|week|all)$")):
+    """
+    Aggregate history stats for a range, computed in SQL — contact count,
+    distinct aircraft, closest approach and which aircraft made it, and the
+    busiest hour of the day.
+    """
+    return controller.GetHistoryStats(range)
 
 @app.get("/api/wifi")
 def get_wifi_networks():
@@ -133,8 +195,11 @@ def restart_service():
     """Restarts the airspace-monitor systemd service."""
     logger.info("Restarting airspace-monitor service...")
     try:
+        # systemctl restart sends SIGTERM, which Controller._install_signal_handlers
+        # routes into the same clean shutdown path as /api/shutdown, so open
+        # contacts are flushed before the process goes away.
         result = subprocess.run(
-            ["systemctl", "restart", "airspace-monitor"],
+            ["systemctl", "restart", "airspace-monitor-service"],
             capture_output=True,
             text=True,
             timeout=15,
@@ -146,17 +211,22 @@ def restart_service():
 
 @app.post("/api/shutdown")
 def shutdown():
-    """Gracefully shuts down the controller's hardware loop."""
+    """
+    Gracefully shuts down the controller's hardware loop.
+
+    Blocks until the hardware thread has flushed open contacts and closed the
+    database, so the caller knows the write actually happened.
+    """
     controller.Shutdown()
     return {"status": "shutting_down"}
 
 @app.get("/api/logs")
 def get_logs():
     """
-    Returns the most recent log entries from system.log.
+    Returns the most recent log entries from the live (tmpfs) log.
     Reads the tail of the log file and returns the last 200 lines.
     """
-    log_file = "system.log"
+    log_file = GetLiveLogPath()
     try:
         with open(log_file, 'r') as f:
             lines = f.readlines()

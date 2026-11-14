@@ -10,15 +10,220 @@ The monitor-service is the core orchestrator of the Airspace Monitor project. Ru
 * **Web Framework:** FastAPI with Uvicorn
 * **Hardware Libraries:** smbus2 (I2C for Split-Flaps), spidev (SPI for E-Ink), RPi.GPIO
 * **Data Processing:** requests, csv
+* **Persistence:** SQLite (WAL mode)
 
-## Core Modules
+## Runtime state: a three-way split
+
+Runtime state used to live in a single `SystemState` class that mixed three
+unrelated concerns. It is now split three ways, with strictly separated
+responsibilities:
+
+| Component | Owns | Knows about |
+|---|---|---|
+| `controller/state.py` — `SystemState` | Hardware and service state only | Nothing else |
+| `controller/tracker.py` — `ContactTracker` | Live air picture, track continuity, event emission | Nothing else — **no disk I/O whatsoever** |
+| `data/history.py` — `HistoryStore` | SQLite persistence, flush policy, retention | Subscribes to tracker events |
+
+The dependency arrow only points one way: `HistoryStore` subscribes to
+`ContactTracker`, never the reverse. The tracker has no database handle, no
+file path, and does not import `sqlite3`. That constraint is what guarantees a
+per-cycle update costs zero writes to the SD card, and it is what makes the
+tracker directly unit-testable with synthetic `Aircraft` lists and no mocking.
+
+`Controller.GetState()` composes the API snapshot from `SystemState` and
+`ContactTracker`. `SystemStateSnapshot` is unchanged on the wire.
+
+### state.py (Hardware and service state)
+
+Uptime, whether the loop is running, which display is active, whether readsb is
+feeding us, and the last update timestamp. Nothing about aircraft. Guarded by an
+`RLock`.
+
+### tracker.py (The live air picture)
+
+A **contact** is one aircraft's *visit* to our airspace: from first detection
+until the receiver stops hearing it for longer than `contact_gap_seconds`
+(default 300). Contacts persist across sweeps, so the system can finally tell
+"new contact this sweep" apart from "overhead for ten minutes".
+
+`update(aircraft_list)` runs once per hardware cycle, replacing the old
+`SystemState.update_aircraft()`. It opens contacts for unseen hexes, merges
+telemetry and identity into known ones, re-runs the display-target selection,
+and sweeps for departures. The departure sweep runs **even when the sweep list
+is empty**, or contacts would never close during quiet periods.
+
+The tracker takes ownership of the `Aircraft` objects passed in, so a cycle
+costs zero model copies. External reads (`all_aircraft`, `contacts`,
+`get_contact`) return copies.
+
+#### Best-known identity
+
+Identity arrives late and inconsistently: `_read_aircraft` hardcodes `"???"`
+(`models.UNKNOWN`) for type and registration, and FlightAware enrichment only
+fires once per contact. The last sweep is routinely *less* identified than what
+we knew mid-visit, so `flight`, `registration`, `aircraft_type`, `origin` and
+`destination` are **sticky** — the tracker keeps the best non-unknown value it
+has ever seen and never blindly overwrites with the latest sweep. Positional
+telemetry (lat, lon, altitude, speed, heading, distance, bearing) always takes
+the latest value.
+
+A consequence worth exploiting: enrichment is now a per-*contact* event rather
+than a per-sweep one. `Controller._on_tracker_event` calls FlightAware when a
+contact opens with an unresolved route (retrying on the first update where a
+callsign appears), and the answer sticks for the rest of the visit. This makes
+the TTL cache in `flightaware.py` largely redundant; it is left in place but no
+longer load-bearing.
+
+#### The event contract
+
+Three transitions, defined as dataclasses in `models.py`. **This is the
+load-bearing interface for later phases** — Phase 3 streams these over SSE and
+Phase 4 dead-reckons between them.
+
+* **`ContactOpened(contact)`** — a hex not seen within the gap window.
+* **`ContactUpdated(contact, previous)`** — telemetry refresh on a known track.
+  `previous` is the `Aircraft` the contact carried before this sweep, so a
+  subscriber can compute deltas without keeping its own shadow copy.
+* **`ContactClosed(contact)`** — gap timeout exceeded, or a clean shutdown.
+  Carries the completed record.
+
+Subscribe with `tracker.subscribe(handler)`. Two rules matter:
+
+1. **Handlers are never invoked while the tracker lock is held.** `HistoryStore`
+   does SQLite I/O in its handler, and dispatching under the lock would block
+   every API read for the duration of a disk write. The pattern is: mutate under
+   lock → collect events into a local list → release lock → dispatch.
+2. **A subscriber that raises cannot kill the hardware loop.** Every handler call
+   is wrapped and failures are logged.
+
+#### Display target selection
+
+The sticky-closest logic that used to live in `Controller._pick_closest` is now
+`ContactTracker.current_display_target`. It reasons about whether a contact
+persists across cycles, which is tracker behaviour and had no business being an
+orchestrator side effect. All four rules are preserved exactly:
+
+1. Pick the closest when nothing is displayed.
+2. Keep the current aircraft while it remains in range.
+3. Switch only when another is *strictly* closer.
+4. Fall back to the closest when the current one leaves range.
+
+Two details that a rewrite would quietly break: "still in range" means present
+in *this sweep*, not merely still an open contact; and rule 3 compares against
+the target's distance as of the *previous* cycle. That one-cycle hysteresis is
+what stops the E-Ink thrashing between two converging aircraft.
+
+#### Known behaviour
+
+If `readsb` dies, `_read_aircraft` returns `[]` and every contact will close
+after the gap timeout, recording a mass departure that never happened. Accepted
+for now — but the History UI will eventually want to tell "quiet sky" apart from
+"receiver down", which needs a receiver-health signal rather than an empty sweep.
+
+### history.py (Contact persistence)
+
+SQLite at `data/history.db`, created on first run. `schema_version` is populated
+so future phases have a migration hook.
+
+#### Write policy: write on close, not on ping
+
+**A contact is only worth writing once, when it closes.** While an aircraft is
+in range everything we care about is still changing, so repeated writes would be
+pure waste of the resource we are protecting.
+
+* Live tracks stay in the tracker's memory. Zero I/O.
+* On `ContactClosed`, write one row.
+
+That is roughly one insert per aircraft per visit — a few hundred a day, against
+the ~864,000 we would get logging every sweep at 2s intervals. Three orders of
+magnitude, falling out of the design rather than needing a batching layer.
+
+**Backstop flush:** every `history_flush_seconds` (default 300), currently-open
+contacts are written in a single transaction with `closed = 0`. Losing a few
+minutes of open contacts to a power cut is acceptable; losing hours is not.
+
+#### The `closed` flag
+
+A backstop flush writes `closed = 0`; contact closure updates the row to
+`closed = 1`. **On startup, any surviving `closed = 0` rows are orphans from an
+unclean shutdown** and are marked closed — they are as complete as they will
+ever be. This turns a power cut from data loss into slightly-truncated records,
+for free.
+
+To update rather than duplicate a flushed row, `HistoryStore` keeps a private
+`(hex, first_seen) → rowid` map. There is deliberately **no database id on the
+`Contact` model** — that would leak persistence into the tracker and break the
+separation.
+
+#### Connections
+
+* PRAGMAs on connect: `journal_mode=WAL`, `synchronous=NORMAL`,
+  `busy_timeout=5000`. WAL is chosen primarily so API reads can proceed
+  concurrently with hardware-thread writes, not for wear.
+* Single writer, owned by the hardware thread, guarded by a lock.
+* Readers get their own connection via `threading.local()`. One shared
+  connection with `check_same_thread=False` would serialise API reads behind
+  hardware writes.
+
+#### Counters
+
+`_push_to_display` reads `daily_seen` and `total_seen` on **every** hardware
+cycle. These are cached in memory, refreshed at most every 60 seconds, and
+invalidated on contact close — they must never become SQL queries on that path.
+
+* `daily_seen` = distinct hexes whose visit started since local midnight.
+* `total_seen` = **sum of daily uniques**, matching the previous in-memory
+  behaviour so the number on the E-Ink screen does not visibly jump after this
+  deploy. Note that this double-counts an aircraft seen on multiple days — a
+  daily commuter flight counts once per day. Computed from the per-day distinct
+  counts in `contacts`, plus `daily_stats.unique_aircraft` for days already
+  rolled off by retention.
+* `distinct_aircraft_ever` = distinct hexes across all retained contacts. This
+  is the number most people *think* "total seen" means, so it gets its own name
+  rather than quietly redefining the existing one. Exposed on
+  `/api/history/stats` for the future History UI.
+
+Because these now come from disk, **`total_seen` no longer resets to zero on
+every service restart.** That was the live user-visible bug this phase fixes.
+
+#### Retention
+
+Once per day, contacts older than `history_retention_days` (default 90) are
+rolled into `daily_stats` and deleted. Never on the write path. `PRAGMA optimize`
+runs after pruning; there is deliberately **no scheduled `VACUUM`** — it rewrites
+the entire database, which is exactly the kind of bulk write we are avoiding.
 
 ### controller.py (The Orchestrator)
 
 The entry point of the application. It utilizes Python's threading module to solve the blocking issue of hardware loops:
 
-* **Main Thread:** Runs the FastAPI web server (uvicorn) on port 8000, listening for React dashboard requests.
-* **Daemon Thread:** Runs the hardware_loop() continuously in the background, polling readsb JSON data and pushing updates to the active physical display.
+* **Main Thread:** Runs `_hardware_loop()`, polling readsb JSON data, advancing
+  the contact tracker, and pushing updates to the active physical display.
+* **Daemon Thread:** Runs the FastAPI web server (uvicorn) on port 8000,
+  listening for React dashboard requests.
+
+#### Clean shutdown
+
+`Shutdown()` is **idempotent and safe from any thread**. It sets the stop flag,
+wakes the hardware loop out of its sleep, and — if called from another thread —
+waits for the drain to finish.
+
+The actual flush always happens on the hardware thread, in `_finalize()`: SQLite
+connections are thread-affine, and a signal handler finalising inline could
+re-enter the writer mid-statement. `_finalize()` closes all open contacts through
+the tracker (emitting `ContactClosed` so `HistoryStore` persists them), then
+closes the database.
+
+Every shutdown route is wired in:
+
+* `SIGTERM` and `SIGINT` handlers. `systemctl restart` sends SIGTERM, so this
+  covers both the systemd path *and* the dashboard's Restart Services button.
+* FastAPI's shutdown event, as a secondary hook.
+* `POST /api/shutdown`, which blocks until the flush has actually happened.
+
+The systemd unit sets `TimeoutStopSec=30`, comfortably above the 10s shutdown
+timeout plus one hardware cycle. Dropping it below ~15s risks a SIGKILL
+mid-flush, which shows up as `closed = 0` orphans on the next start.
 
 ### api.py (The Web Interface)
 
@@ -26,11 +231,30 @@ Defines the REST endpoints consumed by the React dashboard.
 
 Some examples of the API are as follows:
 * GET /api/flights: Returns active overhead flights.
+* GET /api/state: Returns the composed system state snapshot.
 * POST /api/mode: Toggles between 'E-Ink' and 'Split-Flap'.
 * POST /api/git-pull: Executes an OS-level subprocess call to update the repo.
 * POST /api/update-db: Uses FastAPI's BackgroundTasks to download the 50MB aircraft database without blocking the UI.
+* GET /api/history/contacts: Recent completed contacts, most recent first.
+* GET /api/history/stats: Aggregate history stats for a range.
 
-### aircraft_db.py (Local Caching)
+`/api/flights` and `/api/state` are unchanged on the wire. The dashboard needs
+no frontend changes for this phase.
+
+#### History endpoints
+
+**`GET /api/history/contacts?before=<last_seen>&before_id=<id>&limit=50`** —
+most recent first, **keyset-paginated, not `OFFSET`-paginated**. Rows are
+inserted underneath the cursor as aircraft come and go, and offset pagination
+silently skips and repeats rows under exactly those conditions. Page forward
+using the `next_before` / `next_before_id` values from the previous response.
+
+**`GET /api/history/stats?range=today|week|all`** — contact count, distinct
+aircraft, closest approach and which aircraft made it, and busiest hour. All
+computed **in SQL**: never make a client page through thousands of contacts to
+work out "closest approach today".
+
+### aircraft_database.py (Local Caching)
 
 Manages the OpenSky Network aircraft database. Loads the CSV of ADS-B hex codes in `data/aircraft_database.csv` and uses that to get aircraft types and tail numbers locally instead of hitting the FlightAware API for every flight.
 
@@ -40,10 +264,77 @@ Wraps the FlightAware AeroAPI.
 
 Used exclusively to fetch Origin/Destination IATA codes (e.g., YOW -> LHR), as this data is not broadcasted via raw ADS-B.
 
-Includes a Time-To-Live (TTL) memory cache to prevent redundant API calls for flights loitering in the airspace.
+Includes a Time-To-Live (TTL) memory cache. Since enrichment moved to
+contact-open this is largely redundant, but it is kept as a cheap safety net for
+repeated visits by the same flight number.
+
+### logs.py (Two handlers, split by level and destination)
+
+The database write policy is carefully frugal, so the logger has to be too — the
+old configuration (50MB × 2 backups, with a per-cycle INFO line in dev mode and
+an INFO line on every FlightAware cache hit) produced a write stream that
+dwarfed the contact inserts.
+
+1. **Live handler → tmpfs** (`/var/log/airspace-monitor/system.log`). Level INFO
+   by default. This is what `/api/logs` tails to feed the dashboard Logs view.
+   Being in RAM, writes are free.
+2. **Persistent handler → SD** (`system.error.log` next to the service). Level
+   **WARNING and above only**. This survives reboots and is what we actually
+   need for diagnosing failures.
+
+This delivers the "flush periodically" intent more cleanly than copying files on
+a timer: the entries worth keeping are written immediately and are low-volume,
+and the high-volume chatter never touches the card at all.
+
+**Sizing is for RAM, not disk.** A Pi Zero 2 W has 512MB. The live handler is
+5MB × 2 backups and the persistent one 2MB × 2 — the old 50MB × 2 on tmpfs would
+have eaten nearly a third of available memory, and `/api/logs` only reads the
+last 200 lines anyway. `os/setup.sh` mounts a dedicated 32MB tmpfs for the live
+log rather than relying on DietPi's shared 20MB RAMlog.
+
+The on-disk format is unchanged and must stay that way — `/api/logs` parses it
+by splitting on spaces and the dashboard expects `timestamp`, `level`, `source`,
+`message`.
+
+Under systemd, stdout goes to the journal, which is another write stream on the
+same card, so the console handler drops to WARNING when no TTY is attached.
+
+`log_level` (default `INFO`) is configurable and applies to the live handler
+only. The persistent handler stays pinned at WARNING regardless — that split is
+the design, not a default.
 
 ### Hardware Drivers
 
-1. eink.py: Handles SPI communication and Pillow (PIL) image generation for the E-Ink dashboard.
+1. eink_display.py: Handles SPI communication and Pillow (PIL) image generation for the E-Ink dashboard.
 
-2. splitflap.py: Handles I2C communication with the MCP23017 expanders and Stepper Motor logic for the mechanical display.
+2. splitflap_display.py: Handles I2C communication with the MCP23017 expanders and Stepper Motor logic for the mechanical display.
+
+## Configuration
+
+New keys added in this phase (all in `utils/config.py`, and accepted by
+`POST /api/config`):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `contact_gap_seconds` | 300 | How long a hex may go unheard before the visit is closed |
+| `history_flush_seconds` | 300 | Backstop flush interval for open contacts |
+| `history_retention_days` | 90 | Contacts older than this are rolled into `daily_stats` and deleted |
+| `log_level` | `"INFO"` | Level for the live log; the persistent log stays at WARNING |
+
+The Settings UI does not expose these yet and does not need to — `ConfigUpdate`
+only applies non-null fields, so omitting them is safe. `log_level`,
+`contact_gap_seconds`, `history_flush_seconds` and `history_retention_days` are
+applied to the live objects on save rather than requiring a restart.
+
+## Tests
+
+```bash
+pip install -r monitor-service/dev.requirements.txt
+cd monitor-service && python -m pytest tests/ -q
+```
+
+`tests/test_tracker.py` covers the tracker with synthetic `Aircraft` lists and a
+supplied clock. There is nothing to mock — **if a test in that file ever needs a
+mock, the separation between tracker, state and history has gone wrong.**
+`tests/test_history.py` exercises the store against a real SQLite file in a
+`tmp_path`.

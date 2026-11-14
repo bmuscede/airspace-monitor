@@ -1,0 +1,2 @@
+# Development-only dependencies. Not installed on the Pi by os/setup.sh.
+pytest==8.4.2

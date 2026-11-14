@@ -66,6 +66,34 @@ echo "Setting up Monitor Dashboard Environment..."
 cd $INSTALL_DIR/monitor-dashboard
 npm install
 
+# ---------------------------------------------------------
+# Live log directory (tmpfs)
+#
+# The service writes two logs: a high-volume INFO log that the dashboard tails,
+# and a small WARNING+ log kept for post-mortem diagnosis. Only the second one
+# belongs on the SD card. The first goes to RAM, where writes are free.
+#
+# DietPi's RAMlog usually already mounts /var/log as tmpfs, so check rather than
+# assume. We still give ourselves a dedicated mount with an explicit size cap:
+# RAMlog defaults to 20MB for the whole of /var/log, and our rotation budget
+# (5MB x 2 backups) would come close to filling it on its own.
+# ---------------------------------------------------------
+echo "Setting up tmpfs for live logs..."
+LIVE_LOG_DIR="/var/log/airspace-monitor"
+
+PARENT_FSTYPE="$(findmnt -n -o FSTYPE --target /var/log 2>/dev/null)"
+if [ "$PARENT_FSTYPE" = "tmpfs" ]; then
+    echo "Verified: /var/log is already tmpfs (DietPi RAMlog)."
+else
+    echo "Note: /var/log is '$PARENT_FSTYPE', not tmpfs. Mounting our own."
+fi
+
+mkdir -p "${LIVE_LOG_DIR}"
+if ! grep -q "${LIVE_LOG_DIR}" /etc/fstab; then
+    echo "tmpfs ${LIVE_LOG_DIR} tmpfs defaults,noatime,nosuid,nodev,size=32M,mode=0755 0 0" >> /etc/fstab
+fi
+mountpoint -q "${LIVE_LOG_DIR}" || mount "${LIVE_LOG_DIR}"
+
 # Create the Python Backend Service
 echo "Creating Monitor Service Environment..."
 cat << 'EOF' > /etc/systemd/system/airspace-monitor-service.service
@@ -74,12 +102,21 @@ Description=Airspace Monitor Python Backend
 After=network.target readsb.service
 
 [Service]
-ExecStart=/opt/airspace-monitor/monitor-service/venv/bin/python main.py
+ExecStartPre=/bin/mkdir -p /var/log/airspace-monitor
+ExecStart=/opt/airspace-monitor/monitor-service/venv/bin/python main.py --live_log_dir /var/log/airspace-monitor --log_dir /opt/airspace-monitor/monitor-service
 WorkingDirectory=/opt/airspace-monitor/monitor-service
 StandardOutput=inherit
 StandardError=inherit
 Restart=always
 User=root
+
+# systemctl stop/restart sends SIGTERM, which the controller catches to close
+# out open contacts and flush the history database before exiting. That drain
+# is bounded by SHUTDOWN_TIMEOUT_SECONDS (10s) in controller.py plus at most
+# one 2s hardware cycle, so 30s is comfortable headroom. Do not drop this below
+# ~15s or systemd will SIGKILL mid-flush and the contacts will come back as
+# closed = 0 orphans on the next start.
+TimeoutStopSec=30
 
 [Install]
 WantedBy=multi-user.target
