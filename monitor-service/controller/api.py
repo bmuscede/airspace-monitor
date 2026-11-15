@@ -1,11 +1,12 @@
 import subprocess
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Any, Dict, Optional
 from fastapi import FastAPI, BackgroundTasks, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, RootModel
 from starlette.concurrency import run_in_threadpool
 
+from utils.config import FlattenKeys
 from utils.logs import GetLogger, GetLiveLogPath, SetLogLevel
 
 # Module-level reference to the Controller.
@@ -41,20 +42,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-class ConfigUpdate(BaseModel):
-    """Partial config update — only the fields sent will be merged."""
-    flightaware_url: str = None
-    flightaware_api_key: str = None
-    cache_ttl: int = None
-    home_lat: float = None
-    home_lon: float = None
-    max_radar_range_nm: int = None
-    # Not surfaced by the Settings UI yet, and it does not need to be —
-    # only non-null fields are applied, so omitting them is safe.
-    contact_gap_seconds: int = None
-    history_flush_seconds: int = None
-    history_retention_days: int = None
-    log_level: str = None
+class ConfigUpdate(RootModel[Dict[str, Any]]):
+    """
+    Partial config update.
+
+    The config is nested, so this is a free-form object rather than a field per
+    setting: a caller can send {"radar": {"home_lat": 45.0}} or the flat
+    {"radar.home_lat": 45.0}, and either way only the keys it sends are
+    touched. Keys the config doesn't define are left alone and listed back in
+    the response as "ignored", so a typo can't quietly add a setting nothing
+    reads.
+    """
+    root: Dict[str, Any] = {}
 
 class WifiAddRequest(BaseModel):
     ssid: str
@@ -86,12 +85,20 @@ def get_config():
 def save_config(update: ConfigUpdate):
     """
     Sets the provided config fields in memory and persists to disk.
-    Only non-null fields are applied.
+    Only the keys sent are applied, and null values are ignored.
     """
-    changes = {k: v for k, v in update.dict().items() if v is not None}
+    # Nested objects are flattened to the dotted keys ConfigManager.Set()
+    # takes, so {"radar": {"home_lat": 45.0}} sets radar.home_lat without
+    # replacing the rest of the radar object.
+    changes = {k: v for k, v in FlattenKeys(update.root).items() if v is not None}
+
+    ignored = [key for key in changes if not controller.configManager.Has(key)]
+    for key in ignored:
+        logger.warning(f"Ignoring unknown config key: {key}")
+        changes.pop(key)
 
     if not changes:
-        return {"status": "no changes"}
+        return {"status": "no changes", "ignored": ignored}
 
     # Set each changed value in the in-memory config.
     for key, value in changes.items():
@@ -101,16 +108,16 @@ def save_config(update: ConfigUpdate):
     # them now instead of waiting for a restart.
     if "log_level" in changes:
         SetLogLevel(changes["log_level"])
-    if "contact_gap_seconds" in changes:
-        controller.tracker.contact_gap_seconds = changes["contact_gap_seconds"]
-    if "history_flush_seconds" in changes:
-        controller.history.flush_seconds = changes["history_flush_seconds"]
-    if "history_retention_days" in changes:
-        controller.history.retention_days = changes["history_retention_days"]
+    if "history.contact_gap_seconds" in changes:
+        controller.tracker.contact_gap_seconds = changes["history.contact_gap_seconds"]
+    if "history.flush_seconds" in changes:
+        controller.history.flush_seconds = changes["history.flush_seconds"]
+    if "history.retention_days" in changes:
+        controller.history.retention_days = changes["history.retention_days"]
 
     # Persist the updated config to disk.
     success = controller.configManager.SaveConfig()
-    return {"status": "saved" if success else "error"}
+    return {"status": "saved" if success else "error", "ignored": ignored}
 
 
 @app.get("/api/history/contacts")

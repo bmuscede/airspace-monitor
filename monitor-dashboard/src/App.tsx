@@ -3,7 +3,7 @@ import Sidebar from './components/Sidebar';
 import DashboardView from './views/DashboardView';
 import LogsView from './views/LogsView';
 import SettingsView from './views/SettingsView';
-import { DEFAULT_CONFIG, isNumericConfigKey, normalizeConfig } from './lib/config';
+import { DEFAULT_CONFIG, isNumericConfigKey, normalizeConfig, toConfigPayload } from './lib/config';
 import { useToast } from './lib/toast';
 import type { Config, Flight, SystemStatus, LogEntry, WifiNetwork } from './types';
 
@@ -239,7 +239,7 @@ export default function AirspaceDashboard() {
       const res = await fetch('/api/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(config)
+        body: JSON.stringify(toConfigPayload(config))
       });
       const data = await res.json();
       if (!res.ok || data.status === 'error') throw new Error('Config save rejected.');

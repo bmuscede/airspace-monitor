@@ -60,26 +60,26 @@ class Controller:
 
         self.state = SystemState()
         self.tracker = ContactTracker(
-            contact_gap_seconds=self.configManager.Get("contact_gap_seconds", 300),
+            contact_gap_seconds=self.configManager.Get("history.contact_gap_seconds", 300),
         )
         self.aircraftDB = AircraftDatabase(AIRCRAFT_DB_PATH)
         self.flightAwareClient = FlightAwareClient(
-            apiKey=self.configManager.Get("flightaware_api_key", ""),
-            apiURL=self.configManager.Get("flightaware_url", ""),
-            cacheTTL=self.configManager.Get("cache_ttl", 3600),
+            apiKey=self.configManager.Get("flightaware.api_key", ""),
+            apiURL=self.configManager.Get("flightaware.url", ""),
+            cacheTTL=self.configManager.Get("flightaware.cache_ttl", 3600),
         )
         self.weatherClient = OpenweathermapClient(
-            api_key=self.configManager.Get("openweathermap_api_key", ""),
-            api_url=self.configManager.Get("openweathermap_url", ""),
-            weather_ttl=self.configManager.Get("weather_ttl", 3600),
+            api_key=self.configManager.Get("openweathermap.api_key", ""),
+            api_url=self.configManager.Get("openweathermap.url", ""),
+            weather_ttl=self.configManager.Get("openweathermap.cache_ttl", 3600),
         )
 
         # Persistence. Subscribes to the tracker rather than being called by
         # it — the tracker has no idea this exists.
         self.history = HistoryStore(
             db_path=HISTORY_DB_PATH,
-            flush_seconds=self.configManager.Get("history_flush_seconds", 300),
-            retention_days=self.configManager.Get("history_retention_days", 90),
+            flush_seconds=self.configManager.Get("history.flush_seconds", 300),
+            retention_days=self.configManager.Get("history.retention_days", 90),
             contacts_provider=lambda: self.tracker.contacts,
         )
         self.tracker.subscribe(self.history.handle_event)
@@ -114,7 +114,7 @@ class Controller:
             from display.splitflap_display import SplitFlapDisplay
             self._devDisplay = None
             self.eink = EInkDisplay()
-            self.splitflap = SplitFlapDisplay()
+            self.splitflap = SplitFlapDisplay(self.configManager)
 
     def Start(self) -> None:
         """
@@ -276,9 +276,9 @@ class Controller:
 
         self.state.readsb_connected = True
 
-        home_lat = self.configManager.Get("home_lat", 0.0)
-        home_lon = self.configManager.Get("home_lon", 0.0)
-        max_range = self.configManager.Get("max_radar_range_nm", 50)
+        home_lat = self.configManager.Get("radar.home_lat", 0.0)
+        home_lon = self.configManager.Get("radar.home_lon", 0.0)
+        max_range = self.configManager.Get("radar.max_range_nm", 50)
 
         aircraft_list = []
         for ac in data.get("aircraft", []):
@@ -326,9 +326,9 @@ class Controller:
 
         Returns a normalised list of aircraft dicts.
         """
-        home_lat = self.configManager.Get("home_lat", 0.0)
-        home_lon = self.configManager.Get("home_lon", 0.0)
-        max_range = self.configManager.Get("max_radar_range_nm", 50)
+        home_lat = self.configManager.Get("radar.home_lat", 0.0)
+        home_lon = self.configManager.Get("radar.home_lon", 0.0)
+        max_range = self.configManager.Get("radar.max_range_nm", 50)
 
         # DEBUG, not INFO: this fired on every single cycle and was the single
         # largest contributor to the log write stream in dev mode.
@@ -391,8 +391,8 @@ class Controller:
 
         if aircraft is None:
             # Fetch the weather information.
-            home_lat = self.configManager.Get("home_lat", 0.0)
-            home_lon = self.configManager.Get("home_lon", 0.0)
+            home_lat = self.configManager.Get("radar.home_lat", 0.0)
+            home_lon = self.configManager.Get("radar.home_lon", 0.0)
             forecast = self.weatherClient.get_forecast(home_lat, home_lon)
 
             # Pass bundle information to write no flight.
@@ -400,7 +400,7 @@ class Controller:
             # never a live SQL query — this runs on every hardware cycle.
             state_info = StateInformation(
                 readsb_connected=self.state.readsb_connected,
-                range=self.configManager.Get("max_radar_range_nm", 50),
+                range=self.configManager.Get("radar.max_range_nm", 50),
                 uptime=self.state.uptime,
                 daily_seen=self.history.daily_seen,
                 total_seen=self.history.total_seen
@@ -506,6 +506,15 @@ class Controller:
             self.history.Close()
         except Exception as e:
             self.logger.error(f"Error closing history store: {e}")
+
+        # Release the split-flap's serial port. Only the real driver holds one;
+        # DevDisplay and the E-Ink driver have nothing to close.
+        close_display = getattr(self.splitflap, "Close", None)
+        if close_display is not None:
+            try:
+                close_display()
+            except Exception as e:
+                self.logger.error(f"Error closing the split-flap display: {e}")
 
         self._shutdown_complete.set()
         self.logger.info("Shutdown complete.")

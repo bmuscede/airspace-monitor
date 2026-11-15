@@ -1,4 +1,3 @@
-import sys
 import os
 import time
 import math
@@ -171,7 +170,7 @@ class EInkDisplay(Display):
         Returns true if the state changes or if we hit a timeout.
         """
         current_time = time.time()
-        if self._last_state != new_state:
+        if self._last_state == new_state:
             return False
         if current_time - self._last_update_time < self._throttle_seconds:
             return False

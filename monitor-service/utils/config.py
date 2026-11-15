@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 import re
@@ -6,6 +7,47 @@ import subprocess
 from utils.logs import GetLogger
 
 CONFIG_FILE_NAME = "config.json"
+
+# Nested configuration options are addressed with dots: "flightaware.api_key"
+# is the api_key inside the flightaware object, while "flightaware" is the
+# whole object.
+KEY_SEPARATOR = "."
+
+# Tells "there is no such key" apart from "the value stored there is None".
+_MISSING = object()
+
+
+def _keyParts(key: str):
+    """
+    Splits a dotted key into its parts. Returns [] for anything unusable
+    (a non-string, an empty key, or a stray dot such as "a..b").
+    """
+    if not isinstance(key, str) or not key:
+        return []
+    parts = key.split(KEY_SEPARATOR)
+    return [] if any(not part for part in parts) else parts
+
+
+def _copied(value):
+    """Containers are handed out as copies so callers can't mutate the config."""
+    return copy.deepcopy(value) if isinstance(value, (dict, list)) else value
+
+
+def FlattenKeys(data: dict, prefix: str = "") -> dict:
+    """
+    Turns a nested configuration payload into {dotted key: value}, which is
+    what ConfigManager.Set() takes. Only objects are walked into, so lists,
+    scalars and empty objects come back as leaves.
+    """
+    flat = {}
+    for key, value in data.items():
+        path = f"{prefix}{KEY_SEPARATOR}{key}" if prefix else str(key)
+        if isinstance(value, dict) and value:
+            flat.update(FlattenKeys(value, path))
+        else:
+            flat[path] = value
+    return flat
+
 
 class ConfigManager:
     def __init__(self, configPath=""):
@@ -43,6 +85,16 @@ class ConfigManager:
             # Splitflap display settings.
             "splitflap": {
                 "enabled": False,
+
+                # Serial port of the Chainlink controller. Empty auto-detects
+                # the ESP32 / T-Display USB bridge.
+                "port": "",
+
+                # How the channels below are grouped into rows of flaps, top to
+                # bottom (e.g. [14, 14, 14] for three rows of fourteen). Empty
+                # means every channel is one row, left to right.
+                "rows": [],
+
                 "channels": [
                     # Channels have the format of:
                     # {
@@ -64,6 +116,15 @@ class ConfigManager:
                     "max_attempts": 3,
                     "window_seconds": 600,
                     "backoff_seconds": 15
+                },
+
+                # Home-offset calibration state. The offsets themselves live in
+                # the ESP32's flash; this only remembers whether we have ever
+                # saved them, so the display calibrates itself once and not on
+                # every boot. Clear "calibrated" to force it to run again.
+                "calibration": {
+                    "calibrated": False,
+                    "calibrated_at": 0.0
                 }
             },
 
@@ -90,7 +151,7 @@ class ConfigManager:
         
         # Ensure config file exists on startup, then load into memory.
         if not os.path.exists(self.configPath):
-            self._config = dict(self.defaultConfig)
+            self._config = copy.deepcopy(self.defaultConfig)
             self._writeToDisk(self._config)
         else:
             self._config = self._readFromDisk()
@@ -99,27 +160,56 @@ class ConfigManager:
         """
         Returns a single configuration value by key.
         Dots return nested configuration options. So "test.sub" returns the
-        sub object of sub from test.
+        sub object of sub from test, while "test" returns the whole object.
         Falls back to the provided default, then to the hardcoded
         default config, then to None.
+
+        Objects and lists come back as copies: mutating what Get() returns
+        never changes the live configuration. Use Set() for that.
         """
-        if key in self._config:
-            return self._config[key]
+        value = self._lookup(self._config, key)
+        if value is not _MISSING:
+            return _copied(value)
         if default is not None:
             return default
-        return self.defaultConfig.get(key)
+        value = self._lookup(self.defaultConfig, key)
+        return _copied(value) if value is not _MISSING else None
 
     def Set(self, key: str, value):
         """
         Updates a single configuration value in memory.
-        Objects separated with a dot are nested underneath.
-        Call SaveConfig() afterwards to persist to disk.
+        Objects separated with a dot are nested underneath, so
+        Set("test.sub", 1) sets sub inside test, creating test if it is
+        missing. Call SaveConfig() afterwards to persist to disk.
         """
-        self._config[key] = value
+        parts = _keyParts(key)
+        if not parts:
+            raise ValueError(f"invalid configuration key: {key!r}")
+
+        container = self._config
+        for i, part in enumerate(parts[:-1]):
+            child = container.get(part)
+            if not isinstance(child, dict):
+                if child is not None:
+                    # Refuse to bury a scalar: "a.b" where a is 5 is a bug in
+                    # the caller, not something to silently paper over.
+                    raise ValueError(
+                        f"cannot set {key!r}: {KEY_SEPARATOR.join(parts[:i + 1])} is not an object"
+                    )
+                child = {}
+                container[part] = child
+            container = child
+
+        container[parts[-1]] = copy.deepcopy(value) if isinstance(value, (dict, list)) else value
+
+    def Has(self, key: str) -> bool:
+        """True when the key exists in the active config or in the defaults."""
+        return (self._lookup(self._config, key) is not _MISSING
+                or self._lookup(self.defaultConfig, key) is not _MISSING)
 
     def GetAll(self):
         """Returns a copy of the full configuration dictionary."""
-        return dict(self._config)
+        return copy.deepcopy(self._config)
 
     def SaveConfig(self):
         """
@@ -237,20 +327,53 @@ network={{
 
     # --- Private Helpers ---
 
+    @staticmethod
+    def _lookup(container: dict, key: str):
+        """
+        Walks a dotted key through nested dicts.
+        Returns _MISSING when any part of the path isn't there.
+        """
+        parts = _keyParts(key)
+        if not parts:
+            return _MISSING
+
+        current = container
+        for part in parts:
+            if not isinstance(current, dict) or part not in current:
+                return _MISSING
+            current = current[part]
+        return current
+
+    @classmethod
+    def _mergeWithDefaults(cls, defaults: dict, loaded: dict) -> dict:
+        """
+        Overlays the config file on the defaults, object by object.
+
+        A shallow update would drop every new key inside a nested object the
+        file happens to carry an older copy of (a config written before
+        "splitflap.calibration" existed would hide it entirely), so nested
+        objects are merged rather than replaced. Lists and scalars are taken
+        from the file as-is.
+        """
+        merged = copy.deepcopy(defaults)
+        for key, value in loaded.items():
+            if isinstance(value, dict) and isinstance(merged.get(key), dict):
+                merged[key] = cls._mergeWithDefaults(merged[key], value)
+            else:
+                merged[key] = copy.deepcopy(value)
+        return merged
+
     def _readFromDisk(self):
         """Reads the JSON config file from disk."""
         try:
             with open(self.configPath, 'r') as f:
                 loaded = json.load(f)
 
-                # Merge with defaults so any new keys are always present.
-                merged = dict(self.defaultConfig)
-                merged.update(loaded)
-
-                return merged
+            # Merge with defaults so any new keys are always present.
+            return self._mergeWithDefaults(self.defaultConfig, loaded)
         except Exception as e:
             self.logger.error(f"Error loading config: {e}")
-            return dict(self.defaultConfig)
+            return copy.deepcopy(self.defaultConfig)
 
     def _writeToDisk(self, data: dict):
         """Writes the configuration dictionary to disk as JSON."""

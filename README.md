@@ -27,7 +27,7 @@ It detects live aircraft traffic overhead using an ADS-B antenna and receiver, e
 │   │ (Local Hex Lookup)│    │ (TTL Cache Routes) │   │ (Port 8000)     │   │
 │   └───────────────────┘    └────────────────────┘   └────────┬────────┘   │
 └─────────────┬────────────────────────┬───────────────────────┼────────────┘
-              │ (SPI)                  │ (I2C)                 │
+              │ (SPI)                  │ (USB serial)          │
               ▼                        ▼                       ▼ (HTTP/REST)
     ┌──────────────────┐     ┌───────────────────┐    ┌──────────────────┐
     │  E-Ink Display   │     │ Split-Flap Display│    │  React Dashboard │
@@ -42,7 +42,7 @@ It detects live aircraft traffic overhead using an ADS-B antenna and receiver, e
 - **Live ADS-B Aircraft Tracking:** Ingests raw 1090MHz ADS-B radio signals using `readsb` to decode aircraft hex codes, speed, altitude, heading, bearing, and distance in real time.
 - **Dual Display Support:**
   - 🖼️ **E-Ink Display:** Silent, high-contrast, low-power display via SPI interface (`spidev` + Pillow PIL image renderer).
-  - 🔢 **Split-Flap Display:** Tactile mechanical flap display driven via I2C (`smbus2` with MCP23017 expanders & stepper motor controllers).
+  - 🔢 **Split-Flap Display:** Tactile mechanical flap display (Scott Bezek's splitflap) driven over USB serial (`pyserial`), speaking the Chainlink/ESP32 firmware's protobuf protocol.
 - **Fast Local Data Enrichment:**
   - **Local ICAO Database:** Fast offline lookups of aircraft tail numbers, manufacturers, and model types via a cached 50MB OpenSky database CSV.
   - **FlightAware AeroAPI Integration:** Fetches flight origin/destination airport IATA codes (e.g., `YOW` -> `LHR`) with Time-To-Live (TTL) memory caching to minimize API calls for loitering aircraft.
@@ -66,7 +66,9 @@ It detects live aircraft traffic overhead using an ADS-B antenna and receiver, e
 │   ├── aircraft_db.py   # Local ICAO hex lookup & OpenSky database manager
 │   ├── flightaware.py   # FlightAware AeroAPI client with TTL caching
 │   ├── eink.py          # E-Ink driver (SPI / Pillow rendering)
-│   └── splitflap.py     # Split-Flap driver (I2C / MCP23017 stepper control)
+│   ├── splitflap.py     # Split-Flap display (layout & calibration state)
+│   └── splitflap/       # Split-Flap device: config, protocol, driver
+│       └── calibrate.py # Hands-on calibration & checks (command line tool)
 ├── monitor-dashboard/   # React 18 + TypeScript + Vite + Tailwind CSS v4 dashboard
 │   ├── src/             # Radar view, target lists, hardware toggles, & settings UI
 │   └── vite.config.ts   # Development API proxy configuration (forwarding to port 8000)
@@ -76,6 +78,7 @@ It detects live aircraft traffic overhead using an ADS-B antenna and receiver, e
 │   └── setup.sh         # First-boot bash script executed on DietPi
 ├── scripts/             # Host utility scripts & testing helpers
 │   ├── flash.sh         # Interactive bash script to flash DietPi to SD card
+│   ├── calibrate-splitflap.sh # Calibrate the Split-Flap (stops the service first)
 │   └── variables.sh     # Flashing & OS download configuration variables
 └── docs/                # Component documentation
     ├── MonitorService.md   # Service architecture & API breakdown
@@ -91,7 +94,7 @@ This repository is designed to work with the following hardware:
 - **Radio Receiver:** RTL-SDR USB dongle + 1090 MHz ADS-B antenna.
 - **Displays (Optional / Configurable):**
   - SPI E-Ink Display (e.g., Waveshare E-Paper).
-  - I2C Split-Flap Display with MCP23017 port expanders.
+  - Split-Flap Display (Chainlink driver boards + ESP32), connected by USB.
 
 ---
 
@@ -142,7 +145,7 @@ python3 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 # Install requirements
-pip install fastapi uvicorn requests smbus2 spidev RPi.GPIO Pillow
+pip install fastapi uvicorn requests pyserial spidev RPi.GPIO Pillow
 
 # Run the backend dev server (port 8000)
 uvicorn controller:app --reload --port 8000

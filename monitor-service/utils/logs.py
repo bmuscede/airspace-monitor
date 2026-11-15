@@ -95,6 +95,29 @@ def InitializeLogging(
     return logger
 
 
+def InitializeConsoleLogging(level="INFO"):
+    """
+    Logging for the command line tools (splitflap/calibrate.py).
+
+    Same logger tree as the service, so the drivers' own warnings show up, but
+    printed to the console and written to no files: a tool run from a terminal
+    has no business touching the SD card's log or the live log the dashboard
+    tails.
+    """
+    level_value = _resolve_level(level)
+
+    logger = logging.getLogger(_root_logger_name)
+    logger.setLevel(level_value)
+    if logger.handlers:
+        return logger
+
+    handler = logging.StreamHandler()
+    handler.setLevel(level_value)
+    handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=LOG_DATE_FORMAT))
+    logger.addHandler(handler)
+    return logger
+
+
 def SetLogLevel(level) -> None:
     """
     Applies the configured log level once ConfigManager has loaded.

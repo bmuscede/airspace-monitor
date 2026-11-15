@@ -17,6 +17,29 @@ export function isNumericConfigKey(key: string): key is NumericConfigKey {
 }
 
 /**
+ * Where each form field lives in the service's config, which is nested and
+ * addressed with dots. The form keeps its own flat field names — they are the
+ * input names and the validation keys — and this is the only place that knows
+ * how they map onto the API.
+ */
+export const CONFIG_PATHS: Record<keyof Config, string> = {
+    flightaware_url: 'flightaware.url',
+    flightaware_api_key: 'flightaware.api_key',
+    cache_ttl: 'flightaware.cache_ttl',
+    home_lat: 'radar.home_lat',
+    home_lon: 'radar.home_lon',
+    max_radar_range_nm: 'radar.max_range_nm',
+};
+
+/** Walks a dotted path through a `/api/config` payload. */
+function readPath(payload: Record<string, unknown>, path: string): unknown {
+    return path.split('.').reduce<unknown>((value, part) => {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+        return (value as Record<string, unknown>)[part];
+    }, payload);
+}
+
+/**
  * Picks the fields we own out of a `/api/config` payload, coercing numerics.
  * Anything missing or unusable falls back to the previous value, so a partial
  * or malformed response can never blank the form.
@@ -25,11 +48,13 @@ export function normalizeConfig(payload: unknown, previous: Config): Config {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return previous;
     const raw = payload as Record<string, unknown>;
 
-    const text = (key: 'flightaware_url' | 'flightaware_api_key') =>
-        typeof raw[key] === 'string' ? (raw[key] as string) : previous[key];
+    const text = (key: 'flightaware_url' | 'flightaware_api_key') => {
+        const value = readPath(raw, CONFIG_PATHS[key]);
+        return typeof value === 'string' ? value : previous[key];
+    };
 
     const numeric = (key: NumericConfigKey) => {
-        const value = Number(raw[key]);
+        const value = Number(readPath(raw, CONFIG_PATHS[key]));
         return Number.isFinite(value) ? value : previous[key];
     };
 
@@ -41,6 +66,15 @@ export function normalizeConfig(payload: unknown, previous: Config): Config {
         home_lon: numeric('home_lon'),
         max_radar_range_nm: numeric('max_radar_range_nm'),
     };
+}
+
+/**
+ * The form as a POST body for `/api/config`: one dotted key per field, so the
+ * service sets exactly these and leaves the rest of each object alone.
+ */
+export function toConfigPayload(config: Config): Record<string, unknown> {
+    const keys = Object.keys(CONFIG_PATHS) as (keyof Config)[];
+    return Object.fromEntries(keys.map(key => [CONFIG_PATHS[key], config[key]]));
 }
 
 /** Returns a message per invalid field. An empty object means the form is savable. */

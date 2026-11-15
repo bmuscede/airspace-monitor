@@ -2,13 +2,13 @@
 
 ## Overview
 
-The monitor-service is the core orchestrator of the Airspace Monitor project. Running on a headless Raspberry Pi (DietPi), it handles live ADS-B data ingestion, external API routing, background database management, and physical hardware control (I2C/SPI).
+The monitor-service is the core orchestrator of the Airspace Monitor project. Running on a headless Raspberry Pi (DietPi), it handles live ADS-B data ingestion, external API routing, background database management, and physical hardware control (SPI for the E-Ink panel, USB serial for the split-flap).
 
 ## Tech Stack
 
 * **Language:** Python 3
 * **Web Framework:** FastAPI with Uvicorn
-* **Hardware Libraries:** smbus2 (I2C for Split-Flaps), spidev (SPI for E-Ink), RPi.GPIO
+* **Hardware Libraries:** pyserial (USB serial for the Split-Flap), spidev (SPI for E-Ink), RPi.GPIO
 * **Data Processing:** requests, csv
 * **Persistence:** SQLite (WAL mode)
 
@@ -42,7 +42,7 @@ feeding us, and the last update timestamp. Nothing about aircraft. Guarded by an
 ### tracker.py (The live air picture)
 
 A **contact** is one aircraft's *visit* to our airspace: from first detection
-until the receiver stops hearing it for longer than `contact_gap_seconds`
+until the receiver stops hearing it for longer than `history.contact_gap_seconds`
 (default 300). Contacts persist across sweeps, so the system can finally tell
 "new contact this sweep" apart from "overhead for ten minutes".
 
@@ -138,7 +138,7 @@ That is roughly one insert per aircraft per visit — a few hundred a day, again
 the ~864,000 we would get logging every sweep at 2s intervals. Three orders of
 magnitude, falling out of the design rather than needing a batching layer.
 
-**Backstop flush:** every `history_flush_seconds` (default 300), currently-open
+**Backstop flush:** every `history.flush_seconds` (default 300), currently-open
 contacts are written in a single transaction with `closed = 0`. Losing a few
 minutes of open contacts to a power cut is acceptable; losing hours is not.
 
@@ -188,7 +188,7 @@ every service restart.** That was the live user-visible bug this phase fixes.
 
 #### Retention
 
-Once per day, contacts older than `history_retention_days` (default 90) are
+Once per day, contacts older than `history.retention_days` (default 90) are
 rolled into `daily_stats` and deleted. Never on the write path. `PRAGMA optimize`
 runs after pruning; there is deliberately **no scheduled `VACUUM`** — it rewrites
 the entire database, which is exactly the kind of bulk write we are avoiding.
@@ -307,24 +307,88 @@ the design, not a default.
 
 1. eink_display.py: Handles SPI communication and Pillow (PIL) image generation for the E-Ink dashboard.
 
-2. splitflap_display.py: Handles I2C communication with the MCP23017 expanders and Stepper Motor logic for the mechanical display.
+2. splitflap_display.py: `SplitFlapDisplay`, the `Display` implementation for the mechanical
+split-flap. It holds a `SplitFlapDriver` and decides what to put on it: the longest layout that
+fits the configured flaps — logo flap and flight number, route, type — leaving altitude and speed
+off, because they change every sweep and here every change is a row of flaps turning over. It
+also owns the calibration state (see below).
+
+The display itself is the `splitflap/` package, which knows nothing about aircraft:
+
+| Module | What is in it |
+|---|---|
+| `splitflap/config.py` | `SplitFlapConfig`, `SplitFlapPosition`, `SplitFlapCharset`: the display as config.json describes it, and the flap tokens (`{ACA}857`) that name what is on a spool. Both the service and the calibration tool build theirs with `SplitFlapConfig.from_service_section()` |
+| `splitflap/protocol.py` | The wire format Scott Bezek's Chainlink firmware speaks: COBS framing, a CRC32 trailer and the protobuf messages in `proto/splitflap.proto`, hand-rolled so the service needs no protobuf runtime. Frames in and out as bytes, and everything the firmware tells us: its enums, its messages, and the `SplitFlapStatus` / `SplitFlapModuleStatus` snapshots built out of them, with the questions worth asking of one (`idle`, `text`, `faults`, `healthy`). It knows nothing about serial ports |
+| `splitflap/driver.py` | `SplitFlapDriver`: the connection. Thread-safe, queues writes and retries them until acknowledged, tracks every module's state, re-homes modules that fall into `SENSOR_ERROR` (rate limited, then gives up), and reconnects when the USB port drops |
+| `splitflap/calibrate.py` | The command line tool for building and checking a display (see below) |
 
 ## Configuration
 
-New keys added in this phase (all in `utils/config.py`, and accepted by
-`POST /api/config`):
+`config.json` is nested, and every key is addressed with dots:
+`ConfigManager.Get("radar.home_lat")` reads one value, `Get("radar")` returns
+the whole object, and `Set("radar.home_lat", 43.65)` writes one value without
+disturbing its siblings. `POST /api/config` accepts either shape —
+`{"radar": {"home_lat": 43.65}}` or `{"radar.home_lat": 43.65}` — applies only
+the keys sent, and ignores (and reports) keys the config does not define.
+Loading merges the file over the defaults object by object, so keys added to
+`utils/config.py` later are always present.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `contact_gap_seconds` | 300 | How long a hex may go unheard before the visit is closed |
-| `history_flush_seconds` | 300 | Backstop flush interval for open contacts |
-| `history_retention_days` | 90 | Contacts older than this are rolled into `daily_stats` and deleted |
+| `history.contact_gap_seconds` | 300 | How long a hex may go unheard before the visit is closed |
+| `history.flush_seconds` | 300 | Backstop flush interval for open contacts |
+| `history.retention_days` | 90 | Contacts older than this are rolled into `daily_stats` and deleted |
 | `log_level` | `"INFO"` | Level for the live log; the persistent log stays at WARNING |
+| `splitflap.enabled` | `false` | Whether the service talks to the split-flap display at all |
+| `splitflap.port` | `""` | Serial port of the Chainlink controller; empty auto-detects it |
+| `splitflap.rows` | `[]` | How the channels are grouped into rows of flaps, e.g. `[14, 14, 14]`; empty is one row |
+| `splitflap.channels` | `[]` | One `{channel, charset}` per flap, left to right then top to bottom |
+| `splitflap.charsets` | two | The flaps on each kind of spool, in the order they fall. Multi-character names are logo flaps (`{ACA}`) |
+| `splitflap.auto_rehome` | on | Re-home modules that fall into `SENSOR_ERROR`, rate limited |
+| `splitflap.calibration.calibrated` | `false` | Set once home offsets have been saved to the display's flash |
 
-The Settings UI does not expose these yet and does not need to — `ConfigUpdate`
-only applies non-null fields, so omitting them is safe. `log_level`,
-`contact_gap_seconds`, `history_flush_seconds` and `history_retention_days` are
-applied to the live objects on save rather than requiring a restart.
+The Settings UI exposes the FlightAware and radar keys; the rest are edited in
+the file. `log_level`, `history.contact_gap_seconds`, `history.flush_seconds`
+and `history.retention_days` are applied to the live objects on save rather
+than requiring a restart.
+
+### Split-flap calibration
+
+Home offsets live in the ESP32's flash, not in our config — what the config
+remembers is whether they have ever been saved. On the first start where
+`splitflap.calibration.calibrated` is false, the service homes every module,
+checks none of them are faulted, asks the firmware to save the offsets, and
+records that it did. A failed attempt leaves the flag alone, so the next start
+tries again. Clearing the flag forces a fresh pass.
+
+That automatic pass only persists the offsets the modules homed to. The
+per-flap procedure that measures them (nudge a tenth of a flap at a time, name
+the flap that is showing) needs someone watching the display, so it lives in
+`monitor-service/splitflap/calibrate.py`, with a wrapper that stops the service
+first — only one program can hold the serial port — and starts it again
+afterwards:
+
+```bash
+./scripts/calibrate-splitflap.sh
+```
+
+The tool is also what to reach for when a display is being built or has gone
+wrong. Every command takes `--config_dir` (default `.`) and an optional
+`--port`, and anything after the script name is passed straight through:
+
+| Command | What it is for |
+|---|---|
+| `calibrate [POS ...]` | Measure home offsets, then save them to the ESP32's flash (the default) |
+| `status [--watch]` | Module states, home-sensor counters, loopback health, firmware build |
+| `cycle [--delay N]` | Step every module through every flap: checks the charset matches the spool |
+| `show "{ACA}857"` | Write text and report what wasn't on the flaps |
+| `rehome [POS ...]` | Clear error counters and look for home again |
+| `reset` | Hard-reset the ESP32 through the USB bridge |
+| `ports` | List serial ports, marking the ones that look like an ESP32 |
+| `forget` | Drop the saved calibration state, so the service calibrates on its next start |
+
+A finished `calibrate` records `splitflap.calibration` in config.json itself,
+so the service leaves the offsets alone from then on.
 
 ## Tests
 
