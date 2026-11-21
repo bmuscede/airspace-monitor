@@ -1,16 +1,21 @@
-import { useState, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Sidebar from './components/Sidebar';
+import ConfigGate from './components/settings/ConfigGate';
 import DashboardView from './views/DashboardView';
 import LogsView from './views/LogsView';
-import SettingsView from './views/SettingsView';
-import { DEFAULT_CONFIG, isNumericConfigKey, normalizeConfig, toConfigPayload } from './lib/config';
+import BackendSettings from './views/settings/BackendSettings';
+import SplitFlapSettings from './views/settings/SplitFlapSettings';
+import NetworkSettings from './views/settings/NetworkSettings';
+import SystemSettings from './views/settings/SystemSettings';
+import { ApiError, assertStatus, deleteJson, getJson, isAbortError, postJson } from './lib/api';
+import { SPLITFLAP_PATHS } from './lib/splitflap';
+import { errorReport, useErrorDialog } from './lib/errorDialog';
+import { useSettings } from './lib/useSettings';
 import { useToast } from './lib/toast';
-import type { Config, Flight, SystemStatus, LogEntry, WifiNetwork } from './types';
+import type { Flight, LogEntry, SystemStatus, View, WifiNetwork } from './types';
 
-/** Aborted requests are expected on unmount — they are not failures. */
-function isAbortError(err: unknown): boolean {
-  return err instanceof DOMException && err.name === 'AbortError';
-}
+/** How long the aircraft-DB row keeps saying "Updating…" (see handleCsvUpdate). */
+const CSV_UPDATE_HOLD_MS = 5000;
 
 function toWifiNetworks(data: unknown): WifiNetwork[] | null {
   if (!Array.isArray(data)) return null;
@@ -19,18 +24,36 @@ function toWifiNetworks(data: unknown): WifiNetwork[] | null {
     .map(n => ({ id: n.ssid, ssid: n.ssid }));
 }
 
+/** Reads the saved networks, or throws something the error modal can show. */
+async function fetchWifiNetworks(signal?: AbortSignal): Promise<WifiNetwork[]> {
+  const data = await getJson<unknown>('/api/wifi', { signal });
+  const networks = toWifiNetworks(data);
+  if (!networks) {
+    throw new ApiError('The service returned a Wi-Fi list the dashboard could not read.', {
+      detail: JSON.stringify(data),
+    });
+  }
+  return networks;
+}
+
 export default function AirspaceDashboard() {
-  const [currentView, setCurrentView] = useState<'dashboard' | 'settings' | 'logs'>('dashboard');
+  const [currentView, setCurrentView] = useState<View>('dashboard');
   const mainRef = useRef<HTMLElement>(null);
 
   const { showToast } = useToast();
+  const { showError } = useErrorDialog();
+
+  // Everything that lives in config.json, shared by the Backend and
+  // Split-Flap pages.
+  const settings = useSettings();
 
   // Dashboard State
   const [flights, setFlights] = useState<Flight[]>([]);
   const [selectedHex, setSelectedHex] = useState<string | null>(null);
 
-  // Settings State
+  // Hardware + service State
   const [displayMode, setDisplayMode] = useState<string>('E-Ink');
+  const [switchingMode, setSwitchingMode] = useState(false);
   const [systemStatus, setSystemStatus] = useState<SystemStatus>({
     git: 'Idle',
     csv: 'Up to date',
@@ -40,10 +63,12 @@ export default function AirspaceDashboard() {
 
   // Wi-Fi State
   const [wifiNetworks, setWifiNetworks] = useState<WifiNetwork[]>([]);
+  const [wifiLoading, setWifiLoading] = useState(true);
+  const [wifiFailed, setWifiFailed] = useState(false);
+  const [wifiBusy, setWifiBusy] = useState(false);
 
-  // Config State
-  const [config, setConfig] = useState<Config>(DEFAULT_CONFIG);
-  const [savedConfig, setSavedConfig] = useState<Config>(DEFAULT_CONFIG);
+  // History State — only the count, for the retention and System panels.
+  const [historyContactCount, setHistoryContactCount] = useState<number | null>(null);
 
   // Logs State
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -54,6 +79,12 @@ export default function AirspaceDashboard() {
     ERROR: true
   });
 
+  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  useEffect(() => {
+    const pending = timers.current;
+    return () => pending.forEach(clearTimeout);
+  }, []);
+
   useEffect(() => {
     // Reset main scroll position when switching views
     if (mainRef.current) {
@@ -61,29 +92,58 @@ export default function AirspaceDashboard() {
     }
   }, [currentView]);
 
-  // Initial Load
+  /** Re-reads the saved networks for a refresh, or after an add or remove. */
+  const loadWifi = useCallback(async () => {
+    setWifiLoading(true);
+    try {
+      setWifiNetworks(await fetchWifiNetworks());
+      setWifiFailed(false);
+    } catch (err) {
+      if (isAbortError(err)) return;
+      setWifiFailed(true);
+      showError(errorReport('Wi-Fi networks could not be read', err));
+    } finally {
+      setWifiLoading(false);
+    }
+  }, [showError]);
+
+  // Initial Load. The failure is reported inline on the Network page rather
+  // than as a modal: this runs at startup, on whatever view was opened, so a
+  // modal here would be about a page nobody has asked for yet.
   useEffect(() => {
     const controller = new AbortController();
 
-    fetch('/api/config', { signal: controller.signal })
-      .then(res => res.json())
-      .then(data => {
-        const loaded = normalizeConfig(data, DEFAULT_CONFIG);
-        setConfig(loaded);
-        setSavedConfig(loaded);
-      })
-      .catch(err => {
-        if (!isAbortError(err)) console.error(err);
-      });
+    const read = async () => {
+      try {
+        setWifiNetworks(await fetchWifiNetworks(controller.signal));
+        setWifiFailed(false);
+      } catch (err) {
+        if (isAbortError(err)) return;
+        console.error(err);
+        setWifiFailed(true);
+      } finally {
+        if (!controller.signal.aborted) setWifiLoading(false);
+      }
+    };
 
-    fetch('/api/wifi', { signal: controller.signal })
-      .then(res => res.json())
+    void read();
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    // Ambient information rather than an action: a failure leaves the panels
+    // showing "—" instead of raising anything.
+    getJson<{ contact_count?: unknown }>('/api/history/stats?range=all', { signal: controller.signal })
       .then(data => {
-        const networks = toWifiNetworks(data);
-        if (networks) setWifiNetworks(networks);
+        const count = Number(data?.contact_count);
+        setHistoryContactCount(Number.isFinite(count) ? count : null);
       })
       .catch(err => {
-        if (!isAbortError(err)) console.error(err);
+        if (isAbortError(err)) return;
+        console.error(err);
+        setHistoryContactCount(null);
       });
 
     return () => controller.abort();
@@ -96,8 +156,7 @@ export default function AirspaceDashboard() {
 
     const fetchFlights = async () => {
       try {
-        const res = await fetch('/api/flights', { signal: controller.signal });
-        const data = await res.json();
+        const data = await getJson<unknown>('/api/flights', { signal: controller.signal });
         // TODO: For now, a jump is acceptable. We can smoothly interpret it over time based on the heading eventually.
         if (!Array.isArray(data)) {
           console.warn('Ignoring malformed /api/flights payload; keeping last known targets.');
@@ -105,35 +164,46 @@ export default function AirspaceDashboard() {
         }
         setFlights(data);
       } catch (err) {
+        // Polling failures stay in the console: the sidebar pill is the signal
+        // for a service that has gone quiet, and a modal every two seconds
+        // would bury the page.
         if (!isAbortError(err)) console.error(err);
       }
     };
 
     const fetchState = async () => {
       try {
-        const res = await fetch('/api/state', { signal: controller.signal });
-        const data = await res.json();
+        const data = await getJson<Record<string, unknown>>('/api/state', { signal: controller.signal });
 
         if (!data || typeof data !== 'object' || Array.isArray(data)) {
           console.warn('Ignoring malformed /api/state payload; keeping last known status.');
           return;
         }
 
-        setDisplayMode(data.displayMode || 'E-Ink');
+        setDisplayMode(typeof data.displayMode === 'string' && data.displayMode ? data.displayMode : 'E-Ink');
         setSystemStatus(prev => ({
           ...prev,
           dump1090: data.readsbConnected ? 'Connected' : 'Disconnected',
           service: data.systemRunning ? 'Online' : 'Offline'
         }));
       } catch (err) {
-        if (!isAbortError(err)) console.error(err);
+        if (isAbortError(err)) return;
+        console.error(err);
+        // A service that cannot be reached is offline as far as anyone looking
+        // at this screen is concerned; leaving the pill on its last good value
+        // is the one lie the shell can tell. Only written when it changes, so
+        // an unreachable service does not re-render every two seconds.
+        setSystemStatus(prev =>
+          prev.service === 'Offline' && prev.dump1090 === 'Unknown'
+            ? prev
+            : { ...prev, service: 'Offline', dump1090: 'Unknown' }
+        );
       }
     };
 
     const fetchLogs = async () => {
       try {
-        const res = await fetch('/api/logs', { signal: controller.signal });
-        const data = await res.json();
+        const data = await getJson<unknown>('/api/logs', { signal: controller.signal });
 
         if (!Array.isArray(data)) {
           console.warn('Ignoring malformed /api/logs payload; keeping last known entries.');
@@ -170,135 +240,122 @@ export default function AirspaceDashboard() {
   const handleGitPull = async () => {
     setSystemStatus(prev => ({ ...prev, git: 'Pulling...' }));
     try {
-      const res = await fetch('/api/git-pull', { method: 'POST' });
-      const data = await res.json();
-      if (data.status === 'success') {
-        setSystemStatus(prev => ({ ...prev, git: 'Updated (main)' }));
-        showToast('Codebase updated');
-      } else {
-        setSystemStatus(prev => ({ ...prev, git: 'Error' }));
-        showToast('Codebase not updated', 'error');
+      const data = await postJson<{ status?: string; output?: string }>('/api/git-pull');
+      if (data?.status !== 'success') {
+        // git itself failed, and its stderr is the only useful thing to show.
+        throw new ApiError('The service could not pull the latest code.', { detail: data?.output });
       }
+      setSystemStatus(prev => ({ ...prev, git: 'Updated (main)' }));
+      showToast('Codebase updated');
     } catch (err) {
-      console.error(err);
       setSystemStatus(prev => ({ ...prev, git: 'Error' }));
-      showToast('Codebase not updated', 'error');
+      showError(errorReport('Codebase not updated', err));
     }
   };
 
   const handleCsvUpdate = async () => {
     setSystemStatus(prev => ({ ...prev, csv: 'Updating...' }));
     try {
-      const res = await fetch('/api/update-db', { method: 'POST' });
-      const data = await res.json();
+      const data = await postJson<{ status?: string }>('/api/update-db');
+      assertStatus(data, ['started', 'already_updating'], 'The service did not start the database update.');
       showToast(
-        data.status === 'already_updating'
+        data?.status === 'already_updating'
           ? 'Aircraft DB update already running'
           : 'Aircraft DB update started'
       );
 
       // TODO: Track CSV update completion properly since the backend doesn't broadcast progress. Mocking sleep for now.
-      setTimeout(() => setSystemStatus(prev => ({ ...prev, csv: 'Up to date' })), 5000);
+      timers.current.push(
+        setTimeout(() => setSystemStatus(prev => ({ ...prev, csv: 'Up to date' })), CSV_UPDATE_HOLD_MS)
+      );
     } catch (err) {
-      console.error(err);
       setSystemStatus(prev => ({ ...prev, csv: 'Error' }));
-      showToast('Aircraft DB not updated', 'error');
+      showError(errorReport('Aircraft DB not updated', err));
     }
   };
 
   const handleRestartService = async () => {
     setSystemStatus(prev => ({ ...prev, service: 'Restarting...' }));
     try {
-      const res = await fetch('/api/restart-service', { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok || data.status !== 'success') throw new Error('Service restart rejected.');
+      const data = await postJson<{ status?: string }>('/api/restart-service');
+      assertStatus(data, ['success'], 'The service refused to restart.');
       showToast('Services restarting');
     } catch (err) {
-      console.error(err);
-      showToast('Services not restarted', 'error');
+      showError(errorReport('Services not restarted', err));
     }
   };
 
-  const handleConfigChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const { name, value } = e.target;
-    setConfig(prev => {
-      const next: Config = { ...prev };
-      if (isNumericConfigKey(name)) {
-        // An empty field is held as NaN so validation can flag it rather than
-        // silently POSTing a zero.
-        next[name] = value === '' ? Number.NaN : Number(value);
-      } else if (name === 'flightaware_url' || name === 'flightaware_api_key') {
-        next[name] = value;
-      }
-      return next;
-    });
-  };
-
-  const handleSaveConfig = async () => {
+  const handleShutdown = async () => {
     try {
-      const res = await fetch('/api/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(toConfigPayload(config))
-      });
-      const data = await res.json();
-      if (!res.ok || data.status === 'error') throw new Error('Config save rejected.');
-      setSavedConfig(config);
-      showToast('Changes saved');
+      const data = await postJson<{ status?: string }>('/api/shutdown');
+      assertStatus(data, ['shutting_down'], 'The service did not confirm the shutdown.');
+      // The call blocks until open contacts are flushed, so by the time this
+      // resolves the hardware loop really has stopped. Polling will confirm it.
+      setSystemStatus(prev => ({ ...prev, service: 'Offline' }));
+      showToast('Monitor service shutting down');
     } catch (err) {
-      console.error(err);
-      showToast('Changes not saved', 'error');
+      showError(errorReport('Service not shut down', err));
     }
   };
 
   const setRemoteDisplayMode = async (mode: string) => {
     if (mode === displayMode) return;
+    setSwitchingMode(true);
     try {
       // The backend currently blind-toggles and ignores the body, but the
       // request should still say which mode was asked for.
-      const res = await fetch('/api/mode', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode })
-      });
-      const data = await res.json();
+      const data = await postJson<{ mode?: unknown }>('/api/mode', { mode });
+      if (typeof data?.mode !== 'string') {
+        throw new ApiError('The service did not say which display it switched to.', {
+          detail: JSON.stringify(data),
+        });
+      }
       setDisplayMode(data.mode);
+      showToast(`Hardware output set to ${data.mode}`);
     } catch (err) {
-      console.error(err);
+      showError(errorReport('Hardware output not changed', err));
+    } finally {
+      setSwitchingMode(false);
     }
   };
 
-  const handleAddWifiNetwork = async (ssid: string, password: string) => {
+  const handleAddWifiNetwork = async (ssid: string, password: string): Promise<boolean> => {
+    setWifiBusy(true);
     try {
-      const res = await fetch('/api/wifi', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ssid, password })
-      });
-      if (res.ok) {
-        const networksRes = await fetch('/api/wifi');
-        const networks = toWifiNetworks(await networksRes.json());
-        if (networks) setWifiNetworks(networks);
-      }
+      const data = await postJson<{ status?: string }>('/api/wifi', { ssid, password });
+      assertStatus(data, ['added'], `The service could not add ${ssid}.`);
+      showToast(`${ssid} added`);
+      await loadWifi();
+      return true;
     } catch (err) {
-      console.error(err);
+      showError(errorReport('Network not added', err));
+      return false;
+    } finally {
+      setWifiBusy(false);
     }
   };
 
-  const handleRemoveWifiNetwork = async (id: string) => {
-    const target = wifiNetworks.find(n => n.id === id);
-    if (!target) return;
-
+  const handleRemoveWifiNetwork = async (ssid: string): Promise<boolean> => {
+    setWifiBusy(true);
     try {
-      const res = await fetch(`/api/wifi/${target.ssid}`, { method: 'DELETE' });
-      if (res.ok) {
-        const networksRes = await fetch('/api/wifi');
-        const networks = toWifiNetworks(await networksRes.json());
-        if (networks) setWifiNetworks(networks);
-      }
+      const data = await deleteJson<{ status?: string }>(`/api/wifi/${encodeURIComponent(ssid)}`);
+      assertStatus(data, ['removed'], `The service could not remove ${ssid}.`);
+      showToast(`${ssid} forgotten`);
+      await loadWifi();
+      return true;
     } catch (err) {
-      console.error(err);
+      showError(errorReport('Network not removed', err));
+      return false;
+    } finally {
+      setWifiBusy(false);
     }
+  };
+
+  const handleForgetCalibration = () => {
+    void settings.writeKeys(
+      { [SPLITFLAP_PATHS.calibrated]: false, [SPLITFLAP_PATHS.calibratedAt]: 0 },
+      { success: 'Calibration forgotten', failure: 'Calibration not forgotten' }
+    );
   };
 
   return (
@@ -317,7 +374,9 @@ export default function AirspaceDashboard() {
         {currentView === 'dashboard' && (
           <DashboardView
             flights={flights}
-            maxRadarRange={config.max_radar_range_nm}
+            /* The saved value, not the form's: an unsaved edit on the Backend
+               page must not redraw the scope. */
+            maxRadarRange={settings.savedConfig.max_radar_range_nm}
             selectedHex={selectedHex}
             onSelectTarget={setSelectedHex}
           />
@@ -325,21 +384,75 @@ export default function AirspaceDashboard() {
         {currentView === 'logs' && (
           <LogsView logs={logs} logFilters={logFilters} setLogFilters={setLogFilters} />
         )}
-        {currentView === 'settings' && (
-          <SettingsView
-            config={config}
-            savedConfig={savedConfig}
-            handleConfigChange={handleConfigChange}
-            handleSaveConfig={handleSaveConfig}
-            displayMode={displayMode}
-            setDisplayMode={setRemoteDisplayMode}
+        {currentView === 'history' && (
+          /* TODO: This is a stub comment. The History view is not built yet; the
+             drawer keeps its destination disabled, so this is only a backstop. */
+          <div className="max-w-xl bg-slate-900/40 border border-slate-800/60 rounded-2xl p-6">
+            <h2 className="text-lg font-semibold text-white mb-2">History is not built yet</h2>
+            <p className="text-sm text-slate-400">
+              The service already serves <span className="font-mono">/api/history/contacts</span> and{' '}
+              <span className="font-mono">/api/history/stats</span>, but this view has not been implemented.
+            </p>
+          </div>
+        )}
+        {currentView === 'settings.backend' && (
+          <ConfigGate
+            loaded={settings.loaded}
+            loading={settings.loading}
+            failed={settings.loadFailed}
+            onRetry={settings.reload}
+          >
+            <BackendSettings
+              config={settings.config}
+              savedConfig={settings.savedConfig}
+              setConfigField={settings.setConfigField}
+              onDiscard={settings.discardConfig}
+              onSave={settings.saveConfig}
+              saving={settings.savingConfig}
+              historyContactCount={historyContactCount}
+            />
+          </ConfigGate>
+        )}
+        {currentView === 'settings.splitflap' && (
+          <ConfigGate
+            loaded={settings.loaded}
+            loading={settings.loading}
+            failed={settings.loadFailed}
+            onRetry={settings.reload}
+          >
+            <SplitFlapSettings
+              splitFlap={settings.splitFlap}
+              savedSplitFlap={settings.savedSplitFlap}
+              onChange={settings.updateSplitFlap}
+              onDiscard={settings.discardSplitFlap}
+              onSave={settings.saveSplitFlap}
+              saving={settings.savingSplitFlap}
+              onForgetCalibration={handleForgetCalibration}
+            />
+          </ConfigGate>
+        )}
+        {currentView === 'settings.network' && (
+          <NetworkSettings
+            networks={wifiNetworks}
+            loading={wifiLoading}
+            failed={wifiFailed}
+            busy={wifiBusy}
+            onReload={() => void loadWifi()}
+            onAdd={handleAddWifiNetwork}
+            onRemove={handleRemoveWifiNetwork}
+          />
+        )}
+        {currentView === 'settings.system' && (
+          <SystemSettings
             systemStatus={systemStatus}
-            handleGitPull={handleGitPull}
-            handleCsvUpdate={handleCsvUpdate}
-            handleRestartService={handleRestartService}
-            wifiNetworks={wifiNetworks}
-            onAddWifiNetwork={handleAddWifiNetwork}
-            onRemoveWifiNetwork={handleRemoveWifiNetwork}
+            displayMode={displayMode}
+            onSetDisplayMode={mode => void setRemoteDisplayMode(mode)}
+            switchingMode={switchingMode}
+            onGitPull={() => void handleGitPull()}
+            onCsvUpdate={() => void handleCsvUpdate()}
+            onRestart={() => void handleRestartService()}
+            onShutdown={() => void handleShutdown()}
+            historyContactCount={historyContactCount}
           />
         )}
       </main>
