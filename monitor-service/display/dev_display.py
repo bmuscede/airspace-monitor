@@ -21,6 +21,12 @@ class DevDisplay(EInkDisplay):
         self.mode = mode
         self._width = 800
         self._height = 480
+
+        # The desktop window is not bolted into the case, so the canvas is
+        # shown the way it was drawn. _writeToScreen below bypasses the
+        # panel's orientation step entirely; this keeps the flag defined for
+        # anything that reaches for it.
+        self._rotate_180 = False
         
         # Load fonts.
         self._load_fonts()

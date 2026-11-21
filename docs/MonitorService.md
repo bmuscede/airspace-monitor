@@ -307,6 +307,17 @@ the design, not a default.
 
 1. eink_display.py: Handles SPI communication and Pillow (PIL) image generation for the E-Ink dashboard.
 
+   Everything above `_writeToScreen` draws in reading order, so no layout code
+   carries the case's orientation. `_orient_for_panel` is the single place that
+   knows the panel is mounted upside down in it, and `eink.rotate_180` is what
+   turns that off for a panel mounted the other way up. It is a `ROTATE_180`
+   transpose rather than a resample, so the image is permuted, not softened,
+   which matters on a seven-colour panel that cannot dither cleanly.
+
+   The rotation applies to the hardware write path only. `DevDisplay` overrides
+   `_writeToScreen` to draw into a Tk window, which is not in the case, so the
+   desktop preview stays upright.
+
 2. splitflap_display.py: `SplitFlapDisplay`, the `Display` implementation for the mechanical
 split-flap. It holds a `SplitFlapDriver` and decides what to put on it: the longest layout that
 fits the configured flaps — logo flap and flight number, route, type — leaving altitude and speed
@@ -333,8 +344,17 @@ the keys sent, and ignores (and reports) keys the config does not define.
 Loading merges the file over the defaults object by object, so keys added to
 `utils/config.py` later are always present.
 
+That merge is what lets `os/setup.sh` seed a config at install time: it writes a
+`config.json` holding nothing but `radar.home_lat` and `radar.home_lon`, taken
+from `airspace-monitor.conf` on the boot partition, and every other key still
+comes from the defaults. It only writes when there is no `config.json` already,
+so re-running the installer never overwrites a configured appliance.
+
 | Key | Default | Meaning |
 |---|---|---|
+| `radar.home_lat` / `radar.home_lon` | `0.0` | Where the receiver is. Every distance and bearing is computed from here, and the tracker shows whichever aircraft is closest, so an error here shows the wrong aircraft rather than merely misplacing it on the radar. `scripts/flash.sh` collects this and `os/setup.sh` seeds it on first boot; the defaults put the receiver in the Atlantic |
+| `radar.max_range_nm` | 50 | Aircraft further away than this are dropped on read |
+| `eink.rotate_180` | `true` | Turns the finished image 180 degrees on its way to the panel. On by default: the case in this repo holds the panel upside down. Set `false` for a panel mounted the other way up, or a bare one on the bench |
 | `history.contact_gap_seconds` | 300 | How long a hex may go unheard before the visit is closed |
 | `history.flush_seconds` | 300 | Backstop flush interval for open contacts |
 | `history.retention_days` | 90 | Contacts older than this are rolled into `daily_stats` and deleted |

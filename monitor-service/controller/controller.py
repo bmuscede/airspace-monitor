@@ -113,7 +113,7 @@ class Controller:
             from display.eink_display import EInkDisplay
             from display.splitflap_display import SplitFlapDisplay
             self._devDisplay = None
-            self.eink = EInkDisplay()
+            self.eink = EInkDisplay(self.configManager)
             self.splitflap = SplitFlapDisplay(self.configManager)
 
     def Start(self) -> None:

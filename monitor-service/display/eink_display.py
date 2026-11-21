@@ -35,9 +35,19 @@ COLOUR_RED = (255, 0, 0)
 COLOUR_ORANGE = (255, 128, 0)  
 
 class EInkDisplay(Display):
-    def __init__(self):
+    def __init__(self, configManager=None):
         self.logger = GetLogger("EInk")
         self.logger.debug("Starting EInk display driver initialization...")
+
+        # Whether the finished image is turned 180 degrees on its way to the
+        # panel. Defaults to on, which is what the case in this repo needs:
+        # it holds the panel upside down. Without a ConfigManager (a bare
+        # driver in a test or a script) the default still applies.
+        self._rotate_180 = bool(
+            configManager.Get("eink.rotate_180", True) if configManager is not None else True
+        )
+        if self._rotate_180:
+            self.logger.debug("EInk output will be turned 180 degrees for the case.")
 
         try:
             epd_module = epaper.epaper('epd7in3f')
@@ -49,7 +59,7 @@ class EInkDisplay(Display):
             self._width = self._display.width
             self._height = self._display.height
         except Exception as e:
-            self.logger.error("Failed to initialize EInk display: {e}")
+            self.logger.error(f"Failed to initialize EInk display: {e}")
             self._display = None
 
             self._width = 800
@@ -542,10 +552,23 @@ class EInkDisplay(Display):
         quantized_image = canvas.quantize(palette=pal_image, dither=Image.NONE)
         return quantized_image.convert("RGB")
 
+    def _orient_for_panel(self, canvas):
+        """
+        Turns the finished canvas to match how the panel is mounted.
+
+        Everything above draws in reading order, which keeps the layout code
+        free of the case's orientation. This is the one place that knows the
+        panel is upside down in it. ROTATE_180 is a pixel permutation rather
+        than a resample, so nothing is softened on the way through.
+        """
+        if not getattr(self, "_rotate_180", False):
+            return canvas
+        return canvas.transpose(Image.ROTATE_180)
+
     def _writeToScreen(self, canvas):
         if self._display is not None:
             self.logger.debug("Preparing new image for EInk display...")
-            clean_image = self._prepare_for_epd(canvas)
+            clean_image = self._prepare_for_epd(self._orient_for_panel(canvas))
             self._display.display(self._display.getbuffer(clean_image))
             self._display.sleep()
             self.logger.info("EInk display updated with new image. Going to sleep.")

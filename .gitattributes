@@ -1,0 +1,15 @@
+# Shell scripts must be checked out with LF endings on every platform.
+#
+# These run under bash on Linux and macOS, and the first-boot script is run by
+# bash on the Pi. A CRLF checkout makes the kernel look for an interpreter
+# called "/bin/bash\r", which fails as "bad interpreter: No such file or
+# directory" — and on a headless first boot there is nobody to read that.
+#
+# A Windows clone with core.autocrlf=true already stores LF in the index, so
+# this is what keeps a clone configured otherwise from committing CRLF and
+# breaking the Linux path.
+*.sh text eol=lf
+
+# The DietPi image is binary; never let Git translate anything inside it.
+*.img binary
+*.img.xz binary

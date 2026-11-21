@@ -82,6 +82,20 @@ class ConfigManager:
                 "max_range_nm": 50,
             },
 
+            # E-Ink display settings.
+            "eink": {
+                # Turn the finished image 180 degrees before it is pushed to
+                # the panel. On by default: the case in this repo holds the
+                # panel upside down, so an unrotated image reads upside down
+                # on the hardware. Set false for a panel mounted the other
+                # way up, or for a bare panel on the bench.
+                #
+                # This only affects what is written to the physical panel.
+                # The dev display draws the canvas as-is, since a desktop
+                # window is not in the case.
+                "rotate_180": True,
+            },
+
             # Splitflap display settings.
             "splitflap": {
                 "enabled": False,
