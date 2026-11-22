@@ -8,7 +8,7 @@ The monitor-service is the core orchestrator of the Airspace Monitor project. Ru
 
 * **Language:** Python 3
 * **Web Framework:** FastAPI with Uvicorn
-* **Hardware Libraries:** pyserial (USB serial for the Split-Flap), spidev (SPI for E-Ink), RPi.GPIO
+* **Hardware Libraries:** pyserial (USB serial for the Split-Flap), spidev (SPI for E-Ink), waveshare-epaper. The Waveshare driver reaches for `gpiozero`, which needs the `lgpio` pin factory; both are installed from apt (`python3-gpiozero`, `python3-lgpio`) and reached through a venv created with `--system-site-packages`.
 * **Data Processing:** requests, csv
 * **Persistence:** SQLite (WAL mode)
 
@@ -202,6 +202,35 @@ The entry point of the application. It utilizes Python's threading module to sol
 * **Daemon Thread:** Runs the FastAPI web server (uvicorn) on port 8000,
   listening for React dashboard requests.
 
+#### Telemetry is normalised in the model, not the parsers
+
+`Aircraft` declares `altitude`, `speed` and `heading` as `int`, and the feeds do
+not agree. readsb sends `"gs": 208.9` and `"track": 164.17`, AeroAPI does the
+same for groundspeed and heading, `alt_baro` is the literal string `"ground"`
+for an aircraft on the deck, and any field the aircraft has not transmitted
+arrives as `None`. Pydantic will not narrow a fractional float to `int`, so
+each of these raises a validation error.
+
+That mattered more than it sounds. The error surfaced inside `_hardware_loop()`,
+which logs it and skips the cycle — so the display froze for exactly as long as
+an aircraft was within range, and worked perfectly whenever the sky was empty.
+
+`mode="before"` field validators on `Aircraft` round whatever arrives and fall
+back to `0` for anything unreadable, so a bad field costs one value rather than
+the whole sweep. `heading` additionally wraps modulo 360, because `359.7`
+rounds to `360` — the same direction as `0`, but a character wider in a
+three-column cell. `StateInformation.range` gets the same treatment: it comes
+straight from `radar.max_range_nm`, and `/api/config` validates that a key
+exists but not what type its value is.
+
+This lives in the model rather than in `_read_aircraft` and `_read_aircraft_dev`
+deliberately. It is the one point every `Aircraft` passes through — live readsb,
+dev-mode FlightAware, and contacts rehydrated from the history database — so a
+third feed cannot reintroduce the bug. `int` is kept as the contract rather
+than widening the fields to `float`: the E-Ink panel renders them straight into
+fixed-width columns with `f"{heading}"`, `Contact`'s envelope fields are ints,
+and `history.py` stores `max_speed` as `INTEGER`.
+
 #### Clean shutdown
 
 `Shutdown()` is **idempotent and safe from any thread**. It sets the stop flag,
@@ -318,6 +347,33 @@ the design, not a default.
    `_writeToScreen` to draw into a Tk window, which is not in the case, so the
    desktop preview stays upright.
 
+   **The panel must be woken before every write.** Waveshare's `sleep()` is not
+   just a power state: it ends in `epdconfig.module_exit()`, which calls
+   `SPI.close()` and drops the panel's power pin. Writing after that goes to a
+   closed file descriptor and raises `[Errno 9] Bad file descriptor`, so
+   `_writeToScreen` calls `init()` first — re-opening SPI and re-running the
+   power-on sequence, which is what Waveshare's own examples do before each
+   refresh — and sleeps the panel again in a `finally`, failed write included,
+   so the next cycle starts from the state `init()` expects instead of leaking
+   a descriptor per attempt. The constructor ends with a `sleep()` for the same
+   reason: wake and sleep are always a pair. Left unpaired, the first update
+   after start-up worked and every one after it failed.
+
+   `_writeToScreen` returns whether the panel took the image, and
+   `write_no_flight` / `write_flight_data` record their throttle state only on
+   a `True`. That is load bearing: `_should_update_screen` refuses a repeat of
+   the same state, so recording a failed write would suppress every retry until
+   the aircraft changed, turning one bad write into a frozen panel. Panel
+   errors are logged against the `EInk` logger rather than left to propagate,
+   since the hardware loop reports anything that reaches it as a bare
+   `Hardware loop error` and a display fault should not look like a fault in
+   the radar sweep.
+
+   Note that `_throttle_seconds` is 90 on the E-Ink driver, so a newly acquired
+   flight can take up to a minute and a half to appear. That is deliberate — a
+   full seven-colour refresh takes most of half a minute and the panel has a
+   finite number of them in it.
+
 2. splitflap_display.py: `SplitFlapDisplay`, the `Display` implementation for the mechanical
 split-flap. It holds a `SplitFlapDriver` and decides what to put on it: the longest layout that
 fits the configured flaps — logo flap and flight number, route, type — leaving altitude and speed
@@ -421,4 +477,9 @@ cd monitor-service && python -m pytest tests/ -q
 supplied clock. There is nothing to mock — **if a test in that file ever needs a
 mock, the separation between tracker, state and history has gone wrong.**
 `tests/test_history.py` exercises the store against a real SQLite file in a
-`tmp_path`.
+`tmp_path`. `tests/test_aircraft_coercion.py` feeds readsb-shaped payloads --
+fractional speeds and tracks, `"ground"`, absent fields -- through the real
+`_read_aircraft`, built on a bare `Controller.__new__` so the parser can be
+exercised without starting displays or the FlightAware client.
+`tests/test_eink_display.py` drives the panel through a fake, so the rotation
+and image handling are checked without hardware.

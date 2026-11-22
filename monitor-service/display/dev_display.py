@@ -88,10 +88,15 @@ class DevDisplay(EInkDisplay):
             
         self._writeToScreen(canvas)
 
-    def _writeToScreen(self, canvas):
+    def _writeToScreen(self, canvas) -> bool:
         """
         OVERRIDE: Intercepts the final canvas from the EInk parent class.
         Instead of pushing to hardware, we render it to the desktop window.
+
+        Returns True like the parent does. A window always accepts the
+        image, but the caller uses the return value to decide whether to
+        record its throttle state, so returning None here would make the
+        dev display redraw on every single cycle.
         """
         # E-Ink images are 1-bit monochrome. Tkinter requires RGB.
         img = canvas.convert("RGB")
@@ -101,6 +106,7 @@ class DevDisplay(EInkDisplay):
         # Non-blocking GUI update. This allows your controller.py while-loop 
         # to keep spinning without freezing the desktop window!
         self.root.update()
+        return True
 
     def write_no_flight(self, state_info: StateInformation, forecast_data: Optional[WeatherForecast] = None):
         if self.mode == "E-Ink":

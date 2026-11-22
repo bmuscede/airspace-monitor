@@ -213,7 +213,14 @@ apt-get update < /dev/null
 # wget and ca-certificates are listed rather than assumed: the readsb installer
 # is fetched with wget over HTTPS, and a missing one of those made that step
 # fail invisibly.
-apt-get install "${APT_OPTS[@]}" gcc-aarch64-linux-gnu g++-aarch64-linux-gnu build-essential git wget ca-certificates python3 python3-pip python3-venv python3-dev i2c-tools python3-smbus spi-tools nodejs npm swig liblgpio-dev python3-tk libcairo2 avahi-daemon libnss-mdns \
+# python3-gpiozero and python3-lgpio are apt packages on purpose, not pip ones.
+# waveshare-epaper's Raspberry Pi backend runs "import gpiozero" the moment the
+# panel module is imported, but its package metadata declares only RPi.GPIO and
+# spidev -- so pip installs it happily and it dies at run time. gpiozero in turn
+# needs a pin factory, which on Trixie is lgpio, and installing lgpio from pip
+# means compiling its C library on the board. Debian ships both ready built. The
+# venv further down is created with --system-site-packages so it can see them.
+apt-get install "${APT_OPTS[@]}" gcc-aarch64-linux-gnu g++-aarch64-linux-gnu build-essential git wget ca-certificates python3 python3-pip python3-venv python3-dev i2c-tools python3-smbus spi-tools nodejs npm swig liblgpio-dev python3-lgpio python3-gpiozero python3-tk libcairo2 avahi-daemon libnss-mdns \
     || fatal "Could not install system dependencies."
 
 # --now matters: "enable" alone only arms it for the next boot, which would
@@ -340,7 +347,20 @@ done
 # Set up the Python Backend (monitor-service)
 log_progress "[5/9] Setting up Python environment..."
 cd $INSTALL_DIR/monitor-service || fatal "Could not enter the monitor-service directory."
-python3 -m venv venv || fatal "Could not create the Python virtual environment."
+# --system-site-packages is load bearing. gpiozero and lgpio come from apt, and
+# a plain venv cannot see apt-installed modules at all, so the E-Ink driver
+# would import, fail on gpiozero, and leave the panel blank.
+python3 -m venv --system-site-packages venv \
+    || fatal "Could not create the Python virtual environment."
+
+# A venv built before this flag existed keeps its old pyvenv.cfg, and re-running
+# "python3 -m venv" over it is not guaranteed to rewrite the setting. Correct it
+# in place rather than deleting an environment somebody may have fixed by hand.
+if [ -f venv/pyvenv.cfg ] && grep -q "include-system-site-packages = false" venv/pyvenv.cfg; then
+    sed -i "s/include-system-site-packages = false/include-system-site-packages = true/" venv/pyvenv.cfg \
+        && log_progress "  Existing venv could not see system packages; corrected."
+fi
+
 $INSTALL_DIR/monitor-service/venv/bin/pip install --upgrade pip \
     || note_failure "Could not upgrade pip."
 
@@ -351,10 +371,31 @@ if [ -f "requirements.txt" ]; then
 fi
 
 if [ -f "rpi.requirements.txt" ]; then
-    # This is where the Waveshare E-Ink and SPI libraries come from.
+    # This is where the Waveshare E-Ink and SPI libraries come from. gpiozero
+    # and lgpio are deliberately not listed in there: they are apt packages,
+    # and a pip copy inside the venv would shadow the working system one.
     $INSTALL_DIR/monitor-service/venv/bin/pip install -r rpi.requirements.txt \
         || note_failure "Could not install the Raspberry Pi hardware requirements. The displays will not work."
 fi
+
+# ---------------------------------------------------------
+# Prove the display stack actually imports.
+#
+# Every failure here is silent twice over: pip reports success, and then
+# EInkDisplay catches the import error, logs a single line, sets its panel to
+# None and carries on serving a dashboard that drives nothing. A missing
+# gpiozero looks exactly like a dead panel. Importing the modules now puts the
+# answer in the install log instead of in a service log nobody is reading.
+#
+# gpiozero is imported but not exercised on purpose: constructing a pin claims
+# GPIO lines that the service wants a few minutes later.
+for module in spidev gpiozero lgpio epaper PIL; do
+    if $INSTALL_DIR/monitor-service/venv/bin/python -c "import ${module}" 2> /dev/null; then
+        log_progress "  python: ${module} imports OK"
+    else
+        note_failure "python: ${module} will not import inside the venv. The E-Ink display will stay blank."
+    fi
+done
 
 # ---------------------------------------------------------
 # Seed the receiver position.

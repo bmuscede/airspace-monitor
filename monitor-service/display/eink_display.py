@@ -58,6 +58,13 @@ class EInkDisplay(Display):
 
             self._width = self._display.width
             self._height = self._display.height
+
+            # Hand the panel back asleep before anyone writes to it, so every
+            # update starts from the same state: SPI closed, panel powered
+            # down. _writeToScreen wakes it and sleeps it again as a pair, and
+            # leaving SPI open here would mean the first write opened it a
+            # second time and leaked the first descriptor.
+            self._display.sleep()
         except Exception as e:
             self.logger.error(f"Failed to initialize EInk display: {e}")
             self._display = None
@@ -565,13 +572,57 @@ class EInkDisplay(Display):
             return canvas
         return canvas.transpose(Image.ROTATE_180)
 
-    def _writeToScreen(self, canvas):
-        if self._display is not None:
-            self.logger.debug("Preparing new image for EInk display...")
-            clean_image = self._prepare_for_epd(self._orient_for_panel(canvas))
+    def _writeToScreen(self, canvas) -> bool:
+        """
+        Pushes the finished canvas to the panel.
+
+        Returns True only if the panel took the image. The callers record
+        their throttle state on that, so a failed write is retried next cycle
+        instead of being remembered as drawn.
+        """
+        if self._display is None:
+            return False
+
+        self.logger.debug("Preparing new image for EInk display...")
+        clean_image = self._prepare_for_epd(self._orient_for_panel(canvas))
+
+        # Waking the panel is not optional, and sleeping is not only a power
+        # state. Waveshare's sleep() ends in epdconfig.module_exit(), which
+        # calls SPI.close() and drops the panel's power pin -- so writing
+        # without waking first writes to a closed file descriptor and raises
+        # "[Errno 9] Bad file descriptor". The first update after start-up
+        # worked and every one after it failed, which is why the screen
+        # stopped at whatever it happened to be showing.
+        #
+        # init() re-opens SPI and re-runs the power-on sequence. It returns 0
+        # on success and -1 if it could not bring the module up.
+        try:
+            if self._display.init() != 0:
+                self.logger.error("EInk panel would not wake up. Skipping this update.")
+                return False
+        except Exception as e:
+            self.logger.error(f"Failed to wake the EInk display: {e}")
+            return False
+
+        try:
             self._display.display(self._display.getbuffer(clean_image))
-            self._display.sleep()
             self.logger.info("EInk display updated with new image. Going to sleep.")
+            return True
+        except Exception as e:
+            # Caught here rather than left to the hardware loop: the loop
+            # reports it as a bare "Hardware loop error" with no hint that the
+            # display is the culprit, and a panel fault should not look like a
+            # fault in the radar sweep.
+            self.logger.error(f"Failed to write to the EInk display: {e}")
+            return False
+        finally:
+            # Always hand it back asleep, failed write included. That closes
+            # SPI, so the next cycle starts from the state init() expects
+            # rather than leaking a descriptor per attempt.
+            try:
+                self._display.sleep()
+            except Exception as e:
+                self.logger.error(f"Failed to put the EInk display to sleep: {e}")
 
     def write_no_flight(self, state_info: StateInformation, forecast_data: Optional[WeatherForecast] = None):
         # Check if we should update the screen before beginning.
@@ -607,9 +658,12 @@ class EInkDisplay(Display):
         self._draw_idle_tooltext_section(draw, COLOUR_ORANGE)
 
         # Everything is done! Write to the screen and update our state.
-        self._writeToScreen(canvas)
-        self._last_state = flight_state
-        self._last_update_time = time.time()
+        # Only on a successful write: recording the state after a failed one
+        # would make _should_update_screen suppress every retry until the
+        # aircraft changed, turning one bad write into a frozen panel.
+        if self._writeToScreen(canvas):
+            self._last_state = flight_state
+            self._last_update_time = time.time()
 
     def write_flight_data(self, aircraft: Aircraft):
         # Check if we should update the screen before beginning.
@@ -644,6 +698,7 @@ class EInkDisplay(Display):
         self._draw_ticket_stub_section(draw, canvas, aircraft.flight, aircraft.type, logo_filename)
 
         # Everything is done! Write to the screen and update our state.
-        self._writeToScreen(canvas)
-        self._last_state = flight_state
-        self._last_update_time = time.time()
+        # See write_no_flight: the state is recorded only if the panel took it.
+        if self._writeToScreen(canvas):
+            self._last_state = flight_state
+            self._last_update_time = time.time()

@@ -216,6 +216,26 @@ With a bare card, SSH in and work through `setup.sh`'s phases yourself. They are
 less /boot/firmware/airspace-monitor-setup.sh
 ```
 
+The one that is easy to get wrong by hand is the Python environment, `[5/9]`.
+The E-Ink driver needs two modules that `pip` will never install for you:
+
+```
+# gpiozero and lgpio come from apt, not pip. waveshare-epaper imports gpiozero
+# at run time without declaring it, and gpiozero needs lgpio as its pin factory.
+apt-get install python3-gpiozero python3-lgpio
+
+# The venv must be able to see them, hence the flag. Without it the panel stays
+# blank and the only clue is one line in the service log.
+cd /opt/airspace-monitor/monitor-service
+python3 -m venv --system-site-packages venv
+venv/bin/pip install -r requirements.txt -r rpi.requirements.txt
+
+# Check it before moving on. All five must import.
+for m in spidev gpiozero lgpio epaper PIL; do
+    venv/bin/python -c "import $m" && echo "$m OK" || echo "$m MISSING"
+done
+```
+
 The two phases worth suspecting first are the source builds, `[2/9]` RTL-SDR and `[3/9]` readsb, because they are long, they are third-party, and they install packages that overlap. Run the readsb one on its own and watch it:
 
 ```
@@ -270,8 +290,10 @@ cd monitor-service
 python3 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 
-# Install requirements
-pip install fastapi uvicorn requests pyserial spidev RPi.GPIO Pillow
+# Install requirements. Only these two on a desktop: rpi.requirements.txt is
+# for the board, and spidev / the Waveshare driver will not install here.
+pip install -r requirements.txt
+pip install -r dev.requirements.txt
 
 # Run the backend dev server (port 8000)
 uvicorn controller:app --reload --port 8000

@@ -1,5 +1,6 @@
+import math
 from dataclasses import dataclass
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Union
 
 # Sentinel used throughout the service for "we don't know this yet".
@@ -7,6 +8,42 @@ from typing import List, Optional, Union
 # aircraft database / FlightAware fill in the rest later (or never), so every
 # identity field has to have a well-known "unset" value.
 UNKNOWN = "???"
+
+
+def _as_int(value) -> int:
+    """
+    Best-effort whole number from whatever a telemetry feed handed us.
+
+    The feeds do not share our idea of these fields being integral. readsb
+    reports ground speed and track as floats ("gs": 208.9, "track": 164.17),
+    AeroAPI does the same for groundspeed and heading, fields the aircraft has
+    not transmitted arrive as None, and alt_baro is the literal string
+    "ground" for an aircraft that is not flying.
+
+    Pydantic will not narrow a fractional float to int, so each of those used
+    to raise a validation error. One aircraft overhead was enough to abort the
+    whole radar sweep -- the hardware loop caught the error, logged it, and
+    skipped the cycle, so the display froze for as long as the aircraft was in
+    range. Nothing here should be able to do that, so anything unusable
+    becomes 0 and the sweep carries on.
+    """
+    # bool is an int subclass, so this has to come first. A boolean in a
+    # numeric telemetry field is nonsense rather than 0/1.
+    if value is None or isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        # NaN and infinity reach round() and raise, which is the thing we are
+        # here to prevent.
+        if math.isnan(value) or math.isinf(value):
+            return 0
+        return round(value)
+    try:
+        return round(float(value))
+    except (TypeError, ValueError):
+        # "ground" lands here, and so does anything else we cannot read.
+        return 0
 
 class Aircraft(BaseModel):
     hex: str = Field(description="ICAO 24-bit address")
@@ -22,6 +59,28 @@ class Aircraft(BaseModel):
     destination: str = UNKNOWN
     type: str = UNKNOWN
     reg: str = UNKNOWN
+
+    # Normalising here rather than at the call sites is deliberate: this is the
+    # one point every Aircraft passes through, whether it came from live
+    # readsb, from dev-mode FlightAware, or from a contact rehydrated out of
+    # the history database. Fixing the two parsers instead would leave the next
+    # feed to rediscover the same bug.
+    #
+    # int is the right contract to keep, not float: the E-Ink panel renders
+    # these straight into fixed-width columns with f"{heading}", Contact's
+    # envelope fields are ints, and history.py stores max_speed as INTEGER.
+    @field_validator("altitude", "speed", mode="before")
+    @classmethod
+    def _coerce_whole(cls, value):
+        return _as_int(value)
+
+    @field_validator("heading", mode="before")
+    @classmethod
+    def _coerce_heading(cls, value):
+        # 359.7 rounds to 360, which is the same direction as 0 but a
+        # character wider in a three-column cell. Wrapping also tidies up the
+        # negative headings some feeds emit.
+        return _as_int(value) % 360
 
 class WeatherDay(BaseModel):
     day: str
@@ -41,6 +100,16 @@ class StateInformation(BaseModel):
     uptime: str
     daily_seen: int
     total_seen: int
+
+    # radar.max_range_nm comes from config.json, and /api/config checks that a
+    # key exists but not what type its value is -- so a dashboard or a curl
+    # that sets it to 25.5 would otherwise break this model on every idle
+    # cycle, which is the same failure as a fractional ground speed and just
+    # as fatal to the display loop.
+    @field_validator("range", mode="before")
+    @classmethod
+    def _coerce_range(cls, value):
+        return _as_int(value)
 
 class SystemStateSnapshot(BaseModel):
     systemRunning: bool

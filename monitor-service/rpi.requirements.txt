@@ -1,3 +1,11 @@
+# Hardware-only dependencies, installed on the Pi on top of requirements.txt.
+#
+# gpiozero and lgpio are deliberately absent. waveshare-epaper imports gpiozero
+# without declaring it as a dependency, and gpiozero needs the lgpio pin factory
+# on Trixie. Both come from apt instead (python3-gpiozero, python3-lgpio in
+# os/setup.sh), because pip would compile lgpio's C library on the board. The
+# venv is created with --system-site-packages so they resolve, and a pip copy
+# here would shadow the working system one.
 numpy==2.5.1
 RPi.GPIO==0.7.1
 smbus2==0.6.1
